@@ -1,5 +1,5 @@
 # hashium
-A dynamic router for Carrd websites.
+A powerful, dynamic web framework for Carrd.
 
 If you need to hide headers/footers, refer to this script configuration:
 
