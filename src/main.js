@@ -1,1 +1,1 @@
-import CarrdRouter from "./src/cms/carrd/libs/carrdRouter.js";
+import CarrdRouter from "./cms/carrd/libs/carrdRouter.js";
