@@ -1,2 +1,2 @@
 # hashium
-A free, open-source JavaScript web framework for multi-CMS development. Browse dynamically with path-based routing and efficiently with compressed web pages with static websites such as Carrd.
+A free, open-source JavaScript web framework for modern application development. Build dynamic websites with multi-CMS integration, scalable for any solution.
