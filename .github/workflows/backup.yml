@@ -1,0 +1,31 @@
+name: Daily Hashium Repo Backup
+
+on:
+  schedule:
+    - cron: "0 0 * * *"  # Runs daily at midnight UTC
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Create Archive
+        run: |
+          zip -r repo-backup.zip . -x ".git/*"
+
+      - name: Send Email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.porkbun.com
+          server_port: 587
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASS }}
+          subject: "GitHub Repository Backup"
+          body: "Daily backup of Hashium's Github repository."
+          to: "holdings@casellas-maknikar.com"
+          from: "GitHub Backup Bot"
+          attachments: hashium.zip
