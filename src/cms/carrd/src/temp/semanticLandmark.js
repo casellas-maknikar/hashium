@@ -1,4 +1,4 @@
-class MainTransformer {
+class SemanticLandmark {
   static transform() {
     const oldM = document.querySelector('#main'),
     newM = document.createElement('main');
@@ -24,4 +24,4 @@ class MainTransformer {
       tag.textContent = tag.textContent.replace(/#main/g, 'main'));
   }
 }
-document.addEventListener('DOMContentLoaded', MainTransformer.transform);
+document.addEventListener('DOMContentLoaded', SemanticLandmark.transform);
