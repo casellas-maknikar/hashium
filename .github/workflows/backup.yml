@@ -15,7 +15,7 @@ jobs:
 
       - name: Create Archive
         run: |
-          zip -r repo-backup.zip . -x ".git/*"
+          zip -r hashium.zip . -x ".git/*"
 
       - name: Send Email
         uses: dawidd6/action-send-mail@v3
@@ -27,5 +27,5 @@ jobs:
           subject: "GitHub Repository Backup"
           body: "Daily backup of Hashium's Github repository."
           to: "holdings@casellas-maknikar.com"
-          from: "GitHub Backup Bot"
+          from: "GitHub Actions"
           attachments: hashium.zip
