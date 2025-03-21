@@ -1,0 +1,8 @@
+<script id="reload-config-data" type="application/json">
+{
+"configs": [
+{ "id": "my-script", "time": 4},
+{ "id": "externalScript2", "time": 0 }
+]
+}
+</script>
