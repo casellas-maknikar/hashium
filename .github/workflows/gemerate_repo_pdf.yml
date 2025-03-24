@@ -28,7 +28,7 @@ jobs:
           ps2pdf output.ps code.pdf
 
       - name: Upload PDF artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v2
         with:
           name: code-pdf
           path: code.pdf
