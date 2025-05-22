@@ -12,7 +12,7 @@ class HybridRouter {
     this.init();
   }
   path(str) {
-    return str.replaceAll('---', '/');
+    return str.replaceAll('--', '/');
   }
   route() {
     const section = this.path(this.l.hash.slice(1));
