@@ -1,4 +1,4 @@
-class CarrdRouter {
+class HybridRouter {
   constructor() {
     const {
       location,
@@ -31,4 +31,4 @@ class CarrdRouter {
     });
   }
 }
-export default new CarrdRouter();
+export default new HybridRouter();
