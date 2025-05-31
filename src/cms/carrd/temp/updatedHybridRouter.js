@@ -1,13 +1,13 @@
-const locRef = window.location;
-const originRef = locRef.origin;
+const locRef     = window.location;
+const originRef  = locRef.origin;
 const replaceState = window.history.replaceState.bind(window.history);
-const addEvent = window.addEventListener.bind(window);
+const addEvent     = window.addEventListener.bind(window);
 
 class HybridRouter {
-  #loc = locRef;
+  #loc  = locRef;
   #orig = originRef;
-  #rS = replaceState;
-  #aEL = addEvent;
+  #rS   = replaceState;
+  #aEL  = addEvent;
 
   constructor() {
     Object.freeze(this);
@@ -24,9 +24,9 @@ class HybridRouter {
   }
 
   init() {
-    this.#aEL('load', () => this.route());
+    this.#aEL('load',       () => this.route());
     this.#aEL('hashchange', () => setTimeout(() => this.route(), 0));
-    this.#aEL('popstate', e => {
+    this.#aEL('popstate',   e => {
       const section = e.state?.section;
       if (typeof section === 'string') {
         this.#rS(e.state, '', `${this.#orig}/${section}`);
