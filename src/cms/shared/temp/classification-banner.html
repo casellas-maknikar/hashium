@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Classification Banner with Layout Margin</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Example Usage -->
+    <classification-banner type="mil" level="cui"></classification-banner>
+    <main>
+      <h1>Content Area</h1>
+      <p>This content is guaranteed to appear between the top and bottom banners, without being overlapped or hidden.</p>
+    </main>
+    <script>
+      class ClassificationBanner extends HTMLElement {
+        static observedAttributes = ['type', 'level', 'color', 'text', 'position'];
+        constructor() {
+          super();
+          this.attachShadow({
+            mode: 'open'
+          });
+          this.shadowRoot.innerHTML = `
+      
+			<style>
+        .banner {
+          position: fixed;
+          left: 0;
+          width: 100%;
+          padding: 0.5em 1em;
+          font-weight: bold;
+          text-align: center;
+          color: white;
+          z-index: 9999;
+          box-sizing: border-box;
+          text-transform: uppercase;
+          pointer-events: none;
+        }
+        .top { top: 0; }
+        .bottom { bottom: 0; }
+      </style>
+			<div class="banner top" part="banner-top"></div>
+			<div class="banner bottom" part="banner-bottom"></div>
+    `;
+        }
+        connectedCallback() {
+          this.updateBanner();
+          window.addEventListener('load', () => this.applySpacing());
+        }
+        attributeChangedCallback() {
+          this.updateBanner();
+          this.applySpacing();
+        }
+        applySpacing() {
+          const top = this.shadowRoot.querySelector('.top');
+          const bottom = this.shadowRoot.querySelector('.bottom');
+          const showTop = top.style.display !== 'none';
+          const showBottom = bottom.style.display !== 'none';
+          // Reset margins first
+          document.body.style.marginTop = '0px';
+          document.body.style.marginBottom = '0px';
+          // Add margin based on visible banner height
+          if (showTop) {
+            document.body.style.marginTop = top.offsetHeight + 'px';
+          }
+          if (showBottom) {
+            document.body.style.marginBottom = bottom.offsetHeight + 'px';
+          }
+        }
+        updateBanner() {
+          const top = this.shadowRoot.querySelector('.top');
+          const bottom = this.shadowRoot.querySelector('.bottom');
+          const type = (this.getAttribute('type') || '').toLowerCase();
+          const level = (this.getAttribute('level') || '').toLowerCase();
+          const position = (this.getAttribute('position') || 'both').toLowerCase();
+          const schemes = {
+            mil: {
+              unclassified: {
+                color: '#007A33',
+                text: 'Unclassified'
+              },
+              cui: {
+                color: '#502B85',
+                text: 'CUI'
+              },
+              confidential: {
+                color: '#0033A0',
+                text: 'Confidential'
+              },
+              secret: {
+                color: '#C8102E',
+                text: 'Secret'
+              },
+              'top secret': {
+                color: '#FF8C00',
+                text: 'Top Secret'
+              }
+            },
+            gov: {
+              official: {
+                color: '#2B71C7',
+                text: 'Official'
+              },
+              secret: {
+                color: '#F39C2C',
+                text: 'Secret'
+              },
+              'top secret': {
+                color: '#AA0000',
+                text: 'Top Secret'
+              }
+            },
+            com: {
+              public: {
+                color: '#28A197',
+                text: 'Public'
+              },
+              internal: {
+                color: '#12436D',
+                text: 'Internal'
+              },
+              confidential: {
+                color: '#F46A25',
+                text: 'Confidential'
+              },
+              restricted: {
+                color: '#D4351C',
+                text: 'Restricted'
+              }
+            }
+          };
+          // Reset
+          top.style.display = bottom.style.display = 'none';
+          if (!type || !level) {
+            console.error(`
+			<classification-banner> requires both type and level attributes.`);
+            return;
+          }
+          if (type === 'custom') {
+            const color = this.getAttribute('color') || 'gray';
+            const text = (this.getAttribute('text') || level).toUpperCase();
+            if (position === 'top' || position === 'both') {
+              top.style.backgroundColor = color;
+              top.textContent = text;
+              top.style.display = 'block';
+            }
+            if (position === 'bottom' || position === 'both') {
+              bottom.style.backgroundColor = color;
+              bottom.textContent = text;
+              bottom.style.display = 'block';
+            }
+            return;
+          }
+          const scheme = schemes[type];
+          const match = scheme?.[level];
+          if (!match) {
+            console.error(`Invalid level "${level}" for classification type "${type}".`);
+            return;
+          }
+          const color = match.color;
+          const text = match.text.toUpperCase();
+          // Always show both for mil/gov
+          if (type === 'mil' || type === 'gov' || position === 'top' || position === 'both') {
+            top.style.backgroundColor = color;
+            top.textContent = text;
+            top.style.display = 'block';
+          }
+          if (type === 'mil' || type === 'gov' || position === 'bottom' || position === 'both') {
+            bottom.style.backgroundColor = color;
+            bottom.textContent = text;
+            bottom.style.display = 'block';
+          }
+        }
+      }
+      customElements.define('classification-banner', ClassificationBanner);
+    </script>
+  </body>
+</html>
