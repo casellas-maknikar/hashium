@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8" />
+<title>Blue Hex Matrix Background</title>
+<style>
+  /* Full-screen black background */
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+  }
+
+  /* Matrix canvas covers the whole viewport */
+  #matrix {
+    position: absolute;
+    inset: 0;
+    display: block;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="matrix"></canvas>
+
+<script>
+// ===== CONFIG (tweak these if needed) =====
+const MATRIX_CFG = {
+  chars: "0123456789ABCDEF", // hex characters only
+  fontMin: 14,               // minimum font size (px)
+  fontMax: 24,               // maximum font size (px)
+  widthDivisor: 80,          // controls auto-scaling of font size
+  trailAlpha: 0.08,          // 0: no trail, higher: shorter trail
+  baseLightness: 50,         // base HSL lightness (%)
+  gradientBoost: 15,         // extra lightness towards top
+  headBoostChance: 0.9,      // chance to brighten a "head" glyph
+  headBoostAmount: 15,       // extra lightness for head glyphs
+  hue: 200,                  // HSL hue (200 ≈ blue)
+  saturation: 100,           // HSL saturation (%)
+  fps: 30,                   // FPS cap for requestAnimationFrame
+  dropSpeed: 1,              // rows per frame
+  resetChance: 0.975         // randomness for resetting drops
+};
+
+// ===== STATE =====
+const canvas = document.getElementById("matrix");
+const ctx = canvas.getContext("2d");
+
+let cssWidth, cssHeight;   // CSS pixel size (logical screen size)
+let fontSize;              // logical font size in px
+let columns;               // number of rain columns
+let drops = [];
+let lastTime = 0;
+const frameInterval = 1000 / MATRIX_CFG.fps;
+
+// ===== INIT / RESIZE WITH RETINA SUPPORT =====
+function resizeMatrix() {
+  // CSS pixel dimensions
+  cssWidth = window.innerWidth;
+  cssHeight = window.innerHeight;
+
+  // Device pixel ratio for HiDPI / Retina sharpness
+  const dpr = window.devicePixelRatio || 1;
+
+  // Canvas internal DPI-scaled resolution
+  canvas.width = cssWidth * dpr;
+  canvas.height = cssHeight * dpr;
+
+  // Match CSS display size
+  canvas.style.width = cssWidth + "px";
+  canvas.style.height = cssHeight + "px";
+
+  // Scale the drawing context to account for devicePixelRatio
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  // Auto-scale font size based on logical width, then clamp
+  const autoSize = Math.floor(cssWidth / MATRIX_CFG.widthDivisor);
+  fontSize = Math.max(MATRIX_CFG.fontMin, Math.min(MATRIX_CFG.fontMax, autoSize));
+
+  // Number of columns across the logical width
+  columns = Math.floor(cssWidth / fontSize);
+
+  // Reset the drops array
+  drops = Array(columns).fill(1);
+}
+
+// ===== DRAW FRAME =====
+function drawMatrix(timestamp) {
+  // FPS throttling
+  if (timestamp - lastTime >= frameInterval) {
+    lastTime = timestamp;
+
+    // Trail effect using a translucent black rectangle
+    ctx.fillStyle = `rgba(0, 0, 0, ${MATRIX_CFG.trailAlpha})`;
+    ctx.fillRect(0, 0, cssWidth, cssHeight);
+
+    ctx.font = fontSize + "px monospace";
+
+    // Draw hex characters column by column
+    for (let i = 0; i < columns; i++) {
+      const x = i * fontSize;
+      const y = drops[i] * fontSize;
+
+      // Vertical gradient brightness
+      let L = MATRIX_CFG.baseLightness +
+              (1 - y / cssHeight) * MATRIX_CFG.gradientBoost;
+
+      // Occasional "head" glow
+      if (Math.random() > MATRIX_CFG.headBoostChance) {
+        L += MATRIX_CFG.headBoostAmount;
+      }
+
+      // HSL color (blue hex rain)
+      ctx.fillStyle = `hsl(${MATRIX_CFG.hue}, ${MATRIX_CFG.saturation}%, ${L}%)`;
+
+      // Random hex character
+      const char = MATRIX_CFG.chars[
+        Math.floor(Math.random() * MATRIX_CFG.chars.length)
+      ];
+
+      ctx.fillText(char, x, y);
+
+      // Move drop down
+      drops[i] += MATRIX_CFG.dropSpeed;
+
+      // Random reset when reaching bottom
+      if (y > cssHeight && Math.random() > MATRIX_CFG.resetChance) {
+        drops[i] = 0;
+      }
+    }
+  }
+
+  // Continue animation
+  requestAnimationFrame(drawMatrix);
+}
+
+// ===== STARTUP =====
+window.addEventListener("resize", resizeMatrix);
+resizeMatrix();
+requestAnimationFrame(drawMatrix);
+</script>
+
+</body>
+</html>
