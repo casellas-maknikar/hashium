@@ -1,39 +1,34 @@
-// HybridRouter for Carrd
 class HybridRouter {
-    constructor() {
-        this.l = window.location;
-        this.o = this.l.origin;
-
-        // FIX #1: use pushState instead of replaceState so history entries are added
-        this.rS = history.pushState.bind(history);
-
-        this.route();
-        window.addEventListener('hashchange', this.route.bind(this));
-        window.addEventListener('popstate', this.pop.bind(this));
-    }
-
-    path(section) {
-        return section.replaceAll('--', '/');
-    }
-
-    route() {
-        const section = this.l.hash.slice(1);
-        if (section) {
-            // push new entry for each section navigation
-            this.rS({ section }, '', `${this.o}/${this.path(section)}`);
-        }
-    }
-
-    pop(e) {
-        if (e.state) {
-            const section = e.state.section;
-            if (typeof section === 'string') {
-                // FIX #2: instead of writing history again, restore the hash
-                this.l.hash = '#' + section.replaceAll('/', '--');
-            }
-        }
-    }
+  constructor() {
+    const {
+      location,
+      history,
+      addEventListener
+    } = window;
+    this.l = location;
+    this.o = location.origin;
+    this.rS = history.replaceState.bind(history);
+    this.aEL = addEventListener.bind(window);
+    this.init();
+  }
+  path(str) {
+    return str.replaceAll('--', '/');
+  }
+  route() {
+    const section = this.path(this.l.hash.slice(1));
+    this.rS({
+      section
+    }, '', `${this.o}/${section}`);
+  }
+  init() {
+    this.aEL('load', () => this.route());
+    this.aEL('hashchange', () => setTimeout(() => this.route(), 0));
+    this.aEL('popstate', e => {
+      const section = e.state?.section;
+      if (typeof section === 'string') {
+        this.rS(e.state, '', `${this.o}/${section}`);
+      }
+    });
+  }
 }
-
-// default export: runs immediately when script is loaded
 export default new HybridRouter();
