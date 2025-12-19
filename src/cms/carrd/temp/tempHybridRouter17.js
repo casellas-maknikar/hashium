@@ -11,19 +11,17 @@ class HybridRouter {
 
     this.SETTLE_MS = 200;
 
-    // Guards to prevent loops
-    this._ignoreNextPop = false;
+    // Guards
     this._ignoreNextHash = false;
+    this._popLock = false; // re-entrancy guard for popstate loops
 
     this.init();
   }
 
-  // "#page--subpage" -> "page/subpage"
   path(str) {
     return String(str || "").replaceAll("--", "/");
   }
 
-  // "page/subpage" -> "page--subpage"
   unpath(str) {
     return String(str || "").replaceAll("/", "--");
   }
@@ -53,64 +51,55 @@ class HybridRouter {
     this.rS({ section }, "", this.cleanUrl(section));
   }
 
-  // Set hash WITHOUT creating a new history entry (and without looping)
   driveCarrdWithoutHistory(section) {
     const targetHash = this.hashFor(section);
 
-    // If already there, nothing to do
+    // No-op if already correct
     if (this.l.hash === targetHash) return;
 
-    // We are about to cause a hash navigation. Prevent our own handlers looping.
+    // We'll cause a hashchange — mark it as ours (so we don't do anything weird)
     this._ignoreNextHash = true;
 
-    // location.replace avoids adding an entry
+    // DOES NOT add a history entry
     this.l.replace(targetHash);
   }
 
   onHashChange() {
-    // If this hashchange was caused by us, consume the guard but still clean URL.
-    const wasIgnored = this._ignoreNextHash;
+    // Consume the "ours" flag (but we still want to clean the URL)
     this._ignoreNextHash = false;
 
     const section = this.sectionFromHash();
 
     this.afterCarrd(() => {
       this.rewriteCurrentEntryToClean(section);
-
-      // If the hashchange was caused by us, some browsers can emit popstate;
-      // preemptively ignore one popstate tick.
-      if (wasIgnored) this._ignoreNextPop = true;
     });
   }
 
   onPopState() {
-    if (this._ignoreNextPop) {
-      this._ignoreNextPop = false;
-      return;
-    }
+    // Re-entrancy lock: handle the first popstate, ignore any immediate nested ones
+    if (this._popLock) return;
+    this._popLock = true;
+    setTimeout(() => (this._popLock = false), 0);
 
-    // Browser navigated to a clean URL (/page/subpage). Carrd won't react to that.
+    // Browser moved to /page/subpage (clean URL). Carrd doesn't react to that.
     const section = this.sectionFromPath();
 
-    // Prevent immediate re-entry if browser emits popstate for replace()
-    this._ignoreNextPop = true;
-
+    // Drive Carrd via hash WITHOUT adding a history entry
     this.driveCarrdWithoutHistory(section);
-    // Carrd will fire hashchange, which will clean the URL again.
+    // Carrd triggers hashchange; we then clean the URL again.
   }
 
   onLoad() {
-    // If landing on a clean URL with no hash, convert to hash once (no new entry)
+    // If landing directly on /page/subpage with no hash, convert to hash once
     if (!this.l.hash || this.l.hash === "#") {
       const section = this.sectionFromPath();
       if (section) {
-        this._ignoreNextPop = true;
         this.driveCarrdWithoutHistory(section);
         return;
       }
     }
 
-    // If landing with a hash, clean it after Carrd settles
+    // If landing with hash, clean it after Carrd settles
     if (this.l.hash && this.l.hash.length > 1) {
       this.onHashChange();
     } else {
