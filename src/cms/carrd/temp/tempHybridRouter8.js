@@ -4,13 +4,16 @@ class HybridRouter {
 
     this.l = location;
     this.h = history;
+
     this.pS = history.pushState.bind(history);
     this.rS = history.replaceState.bind(history);
+
     this.aEL = addEventListener.bind(window);
     this.rAF = requestAnimationFrame.bind(window);
 
-    // When popstate sets the hash, we MUST NOT pushState again.
-    this._suppressNextPush = false;
+    // When we set hash due to popstate or initial clean-path entry,
+    // we must NOT create a new history entry on the resulting hashchange.
+    this._suppressNextCommit = false;
 
     this.init();
   }
@@ -25,104 +28,94 @@ class HybridRouter {
     return String(str || "").replaceAll("/", "--");
   }
 
-  // Read section from current hash/path
   sectionFromHash() {
     return this.path(this.l.hash.slice(1));
   }
 
-  sectionFromPath() {
-    // "/page/subpage" -> "page/subpage"
-    return decodeURIComponent(this.l.pathname.replace(/^\/+/, ""));
-  }
-
-  // Clean URL for a section (no origin, relative only)
-  urlFor(section) {
+  // Always produce relative clean URL (no origin)
+  cleanUrl(section) {
     return section ? `/${section}` : `/`;
   }
 
-  // After Carrd has navigated (hashchange already happened),
-  // remove the hash from the URL bar without adding history entries.
-  cleanupUrlSoon(section) {
-    // Two rAFs: gives Carrd time to switch sections before we remove the hash
-    this.rAF(() => {
-      this.rAF(() => {
-        this.rS({ section }, "", this.urlFor(section));
-      });
-    });
+  // Carrd hash for a section
+  hashUrl(section) {
+    const hash = section ? `#${this.unpath(section)}` : "";
+    // keep current path (whatever it is) but add hash
+    return `${this.l.pathname}${this.l.search}${hash}`;
   }
 
-  // User navigation (hash change triggered by clicking Carrd links):
-  // create a REAL history entry for each route.
-  commitRouteFromHash() {
+  // Let Carrd finish the section switch, then clean the bar
+  afterCarrd(fn) {
+    this.rAF(() => this.rAF(fn));
+  }
+
+  // Called after hashchange
+  commitFromHash() {
     const section = this.sectionFromHash();
 
-    if (this._suppressNextPush) {
-      // This hashchange was caused by popstate -> we should NOT push a new entry.
-      this._suppressNextPush = false;
-      this.cleanupUrlSoon(section);
+    // If this hashchange was triggered by back/forward or load sync,
+    // don't add new history entries — just clean the URL.
+    if (this._suppressNextCommit) {
+      this._suppressNextCommit = false;
+      this.afterCarrd(() => {
+        this.rS({ section }, "", this.cleanUrl(section));
+      });
       return;
     }
 
-    // Add a new history entry so Back steps through each route
-    this.pS({ section }, "", this.urlFor(section));
+    // 1) Add a real history entry BUT keep the URL as the hash URL (Carrd-safe)
+    //    This creates a stack: ... -> (hash URL) entry
+    this.pS({ section }, "", this.hashUrl(section));
 
-    // Remove hash from the bar after Carrd already used it
-    this.cleanupUrlSoon(section);
+    // 2) Immediately clean the bar for that same entry (no extra history step)
+    this.afterCarrd(() => {
+      this.rS({ section }, "", this.cleanUrl(section));
+    });
   }
 
-  // Back/Forward: the URL changes to /page/subpage...
-  // Carrd only responds to hash, so set the hash to match.
-  syncCarrdToHistory() {
-    const section = this.h.state?.section;
+  // Back/forward: drive Carrd by restoring the hash from state
+  onPopState(e) {
+    const section = e.state?.section;
 
-    // Fallback: if state missing (rare), derive from path
-    const safeSection =
-      typeof section === "string" ? section : this.sectionFromPath();
+    // If we don't have state (rare), do nothing rather than breaking navigation.
+    if (typeof section !== "string") return;
 
-    const targetHash = safeSection ? `#${this.unpath(safeSection)}` : "";
+    const targetHash = section ? `#${this.unpath(section)}` : "";
 
-    // Prevent hashchange from pushing a new history entry
-    this._suppressNextPush = true;
+    // Prevent hashchange from pushing a new entry
+    this._suppressNextCommit = true;
 
-    // Trigger Carrd navigation
+    // This triggers Carrd navigation
     if (this.l.hash !== targetHash) {
       this.l.hash = targetHash;
     } else {
-      // If hash is already correct, still ensure URL is clean + state is consistent
-      this._suppressNextPush = false;
-      this.rS({ section: safeSection }, "", this.urlFor(safeSection));
+      // If already on that hash, still ensure URL is clean/state aligned
+      this.afterCarrd(() => {
+        this.rS({ section }, "", this.cleanUrl(section));
+      });
+      this._suppressNextCommit = false;
     }
   }
 
+  // On direct entry to /page/subpage (clean path), force Carrd section via hash
+  syncCleanPathOnLoad() {
+    const section = decodeURIComponent(this.l.pathname.replace(/^\/+/, ""));
+    if (!section) return;
+
+    const targetHash = `#${this.unpath(section)}`;
+    this._suppressNextCommit = true;
+    this.l.hash = targetHash;
+  }
+
   init() {
-    // On load:
-    // - If arriving with hash (/#page--subpage), push initial state as replace (no new entry)
-    // - If arriving clean (/page/subpage), set state and hash so Carrd navigates
+    // If page loads with a clean path (/page/...), make Carrd navigate via hash.
     this.aEL("load", () => {
-      if (this.l.hash && this.l.hash.length > 1) {
-        const section = this.sectionFromHash();
-        this.rS({ section }, "", this.urlFor(section));
-        // let Carrd keep using hash for initial jump; then cleanup
-        this.cleanupUrlSoon(section);
-        return;
-      }
-
-      // Clean entry like /page/subpage
-      const section = this.sectionFromPath();
-      this.rS({ section }, "", this.urlFor(section));
-
-      if (section) {
-        // drive Carrd to the right section without creating history entries
-        this._suppressNextPush = true;
-        this.l.hash = `#${this.unpath(section)}`;
-      }
+      if (!this.l.hash) this.syncCleanPathOnLoad();
+      // If it loads with a hash, hashchange will fire as user interacts; we don’t need to do anything here.
     });
 
-    // Carrd navigation (clicking internal section links)
-    this.aEL("hashchange", () => this.commitRouteFromHash());
-
-    // Browser back/forward
-    this.aEL("popstate", () => this.syncCarrdToHistory());
+    this.aEL("hashchange", () => this.commitFromHash());
+    this.aEL("popstate", (e) => this.onPopState(e));
   }
 }
 
