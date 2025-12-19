@@ -9,12 +9,11 @@ class HybridRouter {
     this.aEL = addEventListener.bind(window);
     this.rAF = requestAnimationFrame.bind(window);
 
-    // Carrd transitions + its internal locked flag are async.
-    // We wait a bit before rewriting URLs.
-    this.SETTLE_MS = 150;
+    this.SETTLE_MS = 200;
 
-    // Prevent loops when popstate triggers a hash replace
-    this._syncing = false;
+    // Guards to prevent loops
+    this._ignoreNextPop = false;
+    this._ignoreNextHash = false;
 
     this.init();
   }
@@ -30,7 +29,6 @@ class HybridRouter {
   }
 
   sectionFromHash() {
-    // Carrd uses "#" for home (empty)
     return this.path(this.l.hash.slice(1));
   }
 
@@ -42,62 +40,80 @@ class HybridRouter {
     return section ? `/${section}` : `/`;
   }
 
-  // Wait until Carrd has definitely finished reacting to the hashchange
+  hashFor(section) {
+    // Carrd home is "#"
+    return section ? `#${this.unpath(section)}` : "#";
+  }
+
   afterCarrd(fn) {
     this.rAF(() => this.rAF(() => setTimeout(fn, this.SETTLE_MS)));
   }
 
-  // Rewrite the CURRENT history entry to the clean URL (no new entry)
   rewriteCurrentEntryToClean(section) {
     this.rS({ section }, "", this.cleanUrl(section));
   }
 
-  // Drive Carrd navigation WITHOUT adding a new history entry
-  // by using location.replace on the hash.
+  // Set hash WITHOUT creating a new history entry (and without looping)
   driveCarrdWithoutHistory(section) {
-    const hash = section ? `#${this.unpath(section)}` : "#";
-    // location.replace does not create a new history entry
-    this.l.replace(hash);
+    const targetHash = this.hashFor(section);
+
+    // If already there, nothing to do
+    if (this.l.hash === targetHash) return;
+
+    // We are about to cause a hash navigation. Prevent our own handlers looping.
+    this._ignoreNextHash = true;
+
+    // location.replace avoids adding an entry
+    this.l.replace(targetHash);
   }
 
   onHashChange() {
+    // If this hashchange was caused by us, consume the guard but still clean URL.
+    const wasIgnored = this._ignoreNextHash;
+    this._ignoreNextHash = false;
+
     const section = this.sectionFromHash();
 
-    // During popstate sync, don't rewrite too early; still rewrite after settle.
     this.afterCarrd(() => {
       this.rewriteCurrentEntryToClean(section);
-      this._syncing = false;
+
+      // If the hashchange was caused by us, some browsers can emit popstate;
+      // preemptively ignore one popstate tick.
+      if (wasIgnored) this._ignoreNextPop = true;
     });
   }
 
   onPopState() {
-    // Browser went to /page/subpage (clean URL) — Carrd won’t react to that.
+    if (this._ignoreNextPop) {
+      this._ignoreNextPop = false;
+      return;
+    }
+
+    // Browser navigated to a clean URL (/page/subpage). Carrd won't react to that.
     const section = this.sectionFromPath();
 
-    this._syncing = true;
+    // Prevent immediate re-entry if browser emits popstate for replace()
+    this._ignoreNextPop = true;
 
-    // Make Carrd navigate to the correct section without creating new history
     this.driveCarrdWithoutHistory(section);
-
-    // Carrd will fire hashchange; that handler will clean the URL again.
+    // Carrd will fire hashchange, which will clean the URL again.
   }
 
   onLoad() {
-    // If user lands directly on /page/subpage, convert to hash once (no history entry)
+    // If landing on a clean URL with no hash, convert to hash once (no new entry)
     if (!this.l.hash || this.l.hash === "#") {
       const section = this.sectionFromPath();
       if (section) {
-        this._syncing = true;
+        this._ignoreNextPop = true;
         this.driveCarrdWithoutHistory(section);
-        return; // hashchange will fire and clean it
+        return;
       }
     }
 
-    // If user lands with a hash, just clean it after Carrd settles
+    // If landing with a hash, clean it after Carrd settles
     if (this.l.hash && this.l.hash.length > 1) {
       this.onHashChange();
     } else {
-      // Home case: ensure state is consistent
       this.rewriteCurrentEntryToClean("");
     }
   }
