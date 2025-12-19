@@ -9,13 +9,13 @@ class HybridRouter {
     this.rS = history.replaceState.bind(history);
     this.aEL = addEventListener.bind(window);
 
-    // Carrd needs time to finish its own section activation/locking.
-    this.SETTLE_MS = 350; // if still flaky: 500–700
+    // Tune for Carrd transitions
+    this.SETTLE_MS = 350;
 
-    // When Carrd clears hash to "#", we still remember what the user actually clicked.
-    this._pendingSection = null;
+    // Guards
+    this._driving = false;
+    this._lastSection = null;
 
-    // Init AFTER Carrd’s last body script has executed
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", () => this.init(), { once: true });
     } else {
@@ -23,12 +23,10 @@ class HybridRouter {
     }
   }
 
-  // "#page--subpage" -> "page/subpage"
   path(str) {
     return String(str || "").replaceAll("--", "/");
   }
 
-  // "page/subpage" -> "page--subpage"
   unpath(str) {
     return String(str || "").replaceAll("/", "--");
   }
@@ -53,45 +51,62 @@ class HybridRouter {
     setTimeout(fn, this.SETTLE_MS);
   }
 
-  // Clean URL using a *known* section (never read location.hash inside the delayed call)
   cleanTo(section) {
+    // De-dupe repeated calls
+    if (section === this._lastSection) return;
+    this._lastSection = section;
+
     this.rS({ section }, "", this.cleanUrl(section));
   }
 
+  // Set hash WITHOUT navigation, and (if needed) manually trigger Carrd via hashchange
+  setHashWithoutNavigation(targetHash) {
+    if (this.l.hash === targetHash) return;
+
+    // Update URL bar hash in-place
+    this.rS(this.h.state, "", targetHash);
+
+    // Carrd listens for hashchange; replaceState doesn't emit it.
+    // So we dispatch it ourselves.
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+  }
+
   init() {
-    // Handle direct entry to /page/subpage (no hash) by setting hash once
+    // 1) If user lands on clean URL, convert to hash *without navigation*, then let Carrd handle hashchange
     if ((!this.l.hash || this.l.hash === "#") && this.l.pathname !== "/") {
       const section = this.sectionFromPathname(this.l.pathname);
-      this._pendingSection = section;
-      this.l.replace(this.hashForSection(section)); // no new history entry
-      // hashchange will fire; we will clean after settle
+      const targetHash = this.hashForSection(section);
+
+      this._driving = true;
+      this.setHashWithoutNavigation(targetHash);
+      this._driving = false;
+
+      // After Carrd processes, clean to the same section
+      this.settle(() => this.cleanTo(section));
     } else {
-      // Normal load: capture current hash immediately
+      // Normal load: capture hash immediately, clean later
       const section = this.sectionFromHash(this.l.hash);
-      this._pendingSection = section;
       this.settle(() => this.cleanTo(section));
     }
 
-    // Hash navigation (user clicks)
+    // 2) User click navigation (hash changes normally)
     this.aEL("hashchange", () => {
-      // CAPTURE immediately (before Carrd can normalize hash back to "#")
-      const section = this.sectionFromHash(this.l.hash);
-      this._pendingSection = section;
+      if (this._driving) return;
 
-      // Clean later using the captured section
+      const section = this.sectionFromHash(this.l.hash);
       this.settle(() => this.cleanTo(section));
     });
 
-    // Back/Forward
+    // 3) Back/Forward: browser changes pathname among clean URLs;
+    // drive Carrd by setting hash in-place (no location.replace = no recursion)
     this.aEL("popstate", () => {
-      // Browser moved among clean URLs; Carrd needs hash to switch sections.
       const section = this.sectionFromPathname(this.l.pathname);
-      this._pendingSection = section;
+      const targetHash = this.hashForSection(section);
 
-      // Drive Carrd without adding history
-      this.l.replace(this.hashForSection(section));
+      this._driving = true;
+      this.setHashWithoutNavigation(targetHash);
+      this._driving = false;
 
-      // Clean later using captured section (NOT whatever hash becomes)
       this.settle(() => this.cleanTo(section));
     });
   }
