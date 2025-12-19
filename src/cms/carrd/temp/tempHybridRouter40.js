@@ -7,7 +7,7 @@ class HybridRouter {
     this.rS = history.replaceState.bind(history);
     this.aEL = addEventListener.bind(window);
 
-    this.SETTLE_MS = 0;
+    this.SETTLE_MS = 50;
     this._driving = false;
 
     if (document.readyState === 'loading') {
