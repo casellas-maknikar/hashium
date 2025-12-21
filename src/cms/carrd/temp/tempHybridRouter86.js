@@ -3,7 +3,9 @@ class HybridRouter {
     const w = window, d = w.document, l = w.location, h = w.history, t = this;
     t.l = l;
     t.o = l.origin;
+    t.h = h;
     t.rS = h.replaceState.bind(h);
+    t.pS = h.pushState.bind(h);
     t.aEL = w.addEventListener.bind(w);
     t.SETTLE_MS = 450;
     t._driving = 0;
@@ -31,7 +33,6 @@ class HybridRouter {
     return (s && s.id) ? s.id : 'home';
   }
 
-  // Canonical root is '' (clean URL "/"), but Carrd needs a real id to switch sections.
   hashFor(section) {
     if (!section) return `#${this._rootId}`;
     return `#${section.replaceAll('/', '--')}`;
@@ -57,8 +58,10 @@ class HybridRouter {
     return document.querySelector(`[data-scroll-id="${id}"]`);
   }
 
-  isScrollPointHash(hashOrId) {
-    return !!this.getScrollElFromHash(hashOrId);
+  scrollIdFromHash(hashOrId) {
+    const raw = String(hashOrId || '');
+    if (!raw || raw === '#') return '';
+    return raw.startsWith('#') ? raw.slice(1) : raw;
   }
 
   prevNextScrollPoints(el) {
@@ -71,7 +74,6 @@ class HybridRouter {
   }
 
   isInvisibleScrollPoint(el) {
-    // Your confirmed example uses data-scroll-invisible="1"
     return String(el?.getAttribute('data-scroll-invisible') || '') === '1';
   }
 
@@ -89,21 +91,16 @@ class HybridRouter {
     return { behavior, offset, speed };
   }
 
-  // speed: 1 very slow -> 5 very fast (duration decreases as speed increases)
+  // speed: 1 very slow -> 5 very fast
   speedToDurationMs(speed) {
-    // Tune if you want it even closer to Carrd feel
-    // 1: 1400ms, 2: 950ms, 3: 600ms, 4: 330ms, 5: 180ms
     return [0, 1400, 950, 600, 330, 180][Math.round(speed)] || 600;
   }
 
-  // offset: -10..10 (0 default). Interpreting as small pixel steps.
-  // If you ever confirm Carrd uses a different unit, change OFFSET_STEP_PX.
   offsetToPixels(offset) {
-    const OFFSET_STEP_PX = 10; // 1 unit = 10px => max 100px shift
+    const OFFSET_STEP_PX = 10; // -10..10 => -100..100px
     return offset * OFFSET_STEP_PX;
   }
 
-  // Compute Y target based on YOUR rule set
   computeScrollTargetY(el) {
     const { behavior, offset } = this.scrollPrefs(el);
     const { prev, next } = this.prevNextScrollPoints(el);
@@ -116,29 +113,24 @@ class HybridRouter {
     let yTarget;
 
     if (behavior === 'previous') {
-      // align to bottom edge of previous scrollpoint element
-      if (prev) yTarget = absBottom(prev);
-      else yTarget = absTop(el); // fallback to default
+      yTarget = prev ? absBottom(prev) : absTop(el);
     } else if (behavior === 'center') {
-      // center between this scrollpoint and the next one
       if (next) {
         const a = absTop(el);
         const b = absTop(next);
         const mid = (a + b) / 2;
         yTarget = mid - (window.innerHeight / 2);
       } else {
-        yTarget = absTop(el); // fallback to default
+        yTarget = absTop(el);
       }
     } else {
       // default: scroll to the scrollpoint element itself
       yTarget = absTop(el);
     }
 
-    yTarget = Math.max(0, yTarget - offsetPx);
-    return yTarget;
+    return Math.max(0, yTarget - offsetPx);
   }
 
-  // Animated scroll using Carrd-ish prefs
   scrollToEl(el) {
     if (!el) return;
 
@@ -165,11 +157,15 @@ class HybridRouter {
       requestAnimationFrame(step);
     };
 
-    // Layout-safe timing
     requestAnimationFrame(() => requestAnimationFrame(run));
   }
 
-  // ---- Router core ----
+  // URL writer for scrollpoints
+  writeScrollUrl(section, hash, invisible, push) {
+    const url = `${this.o}/${section || ''}${invisible ? '' : hash}`;
+    const state = { section, scrollId: invisible ? '' : this.scrollIdFromHash(hash) };
+    (push ? this.pS : this.rS)(state, '', url);
+  }
 
   drive(section, push) {
     const t = this, l = t.l, ms = t.SETTLE_MS;
@@ -185,15 +181,12 @@ class HybridRouter {
   }
 
   init() {
-    const t = this, l = t.l, o = t.o, rS = t.rS, ms = t.SETTLE_MS;
+    const t = this, l = t.l, o = t.o, ms = t.SETTLE_MS;
 
     t._rootId = t.detectRootId();
 
-    const clean = (section) => rS({ section }, '', `${o}/${section || ''}`);
-    const settleClean = (section) => setTimeout(() => clean(section), ms);
-
     // -----------------------------
-    // Scrollpoint interception (preempt Carrd)
+    // Scrollpoint interception: now PUSHES history entries
     // -----------------------------
     const interceptScrollpoint = (e) => {
       const a = e.target?.closest?.('a[href^="#"]');
@@ -213,10 +206,9 @@ class HybridRouter {
       const section = t.currentSectionCanonical();
       const invisible = t.isInvisibleScrollPoint(el);
 
-      // Mask URL as /page[#id] WITHOUT touching location.hash
-      rS({ section }, '', `${o}/${section || ''}${invisible ? '' : href}`);
+      // ✅ PUSH into history for secondary fragments
+      t.writeScrollUrl(section, href, invisible, true);
 
-      // Scroll using Carrd scrollpoint prefs
       t.scrollToEl(el);
     };
 
@@ -235,26 +227,30 @@ class HybridRouter {
     }, true);
 
     // -----------------------------
-    // Initial entry: handle /page#test if test is a scrollpoint
+    // Initial entry: /page#test direct load
+    // (use REPLACE, not PUSH)
     // -----------------------------
     const initialEl = t.getScrollElFromHash(l.hash);
     if (initialEl) {
       const section = t.sectionFromPath(l.pathname) || '';
+      const invisible = t.isInvisibleScrollPoint(initialEl);
 
-      // Drive to section so it's visible
+      // Ensure section is visible
       t.drive(section, 0);
 
       setTimeout(() => {
         t.scrollToEl(initialEl);
-
-        const invisible = t.isInvisibleScrollPoint(initialEl);
-        rS({ section }, '', `${o}/${section || ''}${invisible ? '' : l.hash}`);
+        t.writeScrollUrl(section, l.hash, invisible, false);
       }, ms + 30);
 
       return;
     }
 
     // Original init behavior
+    const rS = t.rS;
+    const clean = (section) => rS({ section }, '', `${o}/${section || ''}`);
+    const settleClean = (section) => setTimeout(() => clean(section), ms);
+
     if ((!l.hash || l.hash === '#') && l.pathname !== '/') {
       t.drive(t.sectionFromPath(l.pathname), 0);
     } else {
@@ -279,17 +275,17 @@ class HybridRouter {
     }, 1);
 
     // -----------------------------
-    // Hash cleanup (original; ignore scrollpoints)
+    // Hashchange: ignore scrollpoints (we own them)
     // -----------------------------
     t.aEL('hashchange', () => {
       if (t._driving) return;
 
-      // If hash becomes a scrollpoint, treat as secondary fragment
+      // If Carrd somehow sets a scrollpoint hash, normalize with REPLACE
       const el = t.getScrollElFromHash(l.hash);
       if (el) {
         const section = t.currentSectionCanonical();
         const invisible = t.isInvisibleScrollPoint(el);
-        rS({ section }, '', `${o}/${section || ''}${invisible ? '' : l.hash}`);
+        t.writeScrollUrl(section, l.hash, invisible, false);
         t.scrollToEl(el);
         return;
       }
@@ -299,14 +295,33 @@ class HybridRouter {
     });
 
     // -----------------------------
-    // Back / Forward (original)
+    // Back / Forward: restore scrollpoint position from history state
     // -----------------------------
     t.aEL('popstate', (e) => {
       if (t._driving) return;
-      t.drive(
-        typeof e.state?.section === 'string' ? e.state.section : t.sectionFromPath(l.pathname),
-        0
-      );
+
+      const section =
+        typeof e.state?.section === 'string'
+          ? e.state.section
+          : t.sectionFromPath(l.pathname);
+
+      // If this history entry has a scrollId, scroll after section settles
+      const scrollId = typeof e.state?.scrollId === 'string' ? e.state.scrollId : '';
+      const hash = scrollId ? `#${scrollId}` : '';
+
+      // If we’re changing section, drive it
+      t.drive(section, 0);
+
+      if (scrollId) {
+        setTimeout(() => {
+          const el = t.getScrollElFromHash(hash);
+          if (el) t.scrollToEl(el);
+
+          // Ensure URL stays consistent with this history entry (REPLACE)
+          const invisible = el ? t.isInvisibleScrollPoint(el) : false;
+          t.writeScrollUrl(section, hash, invisible, false);
+        }, ms + 30);
+      }
     });
   }
 }
