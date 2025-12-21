@@ -9,26 +9,23 @@ class HybridRouter {
     t._origReplaceState = h.replaceState.bind(h);
     t._origPushState = h.pushState.bind(h);
 
-    // Your router uses t.rS for masking/cleaning
     t.rS = t._origReplaceState;
-
     t.aEL = w.addEventListener.bind(w);
     t.SETTLE_MS = 450;
     t._driving = 0;
 
-    // detected root section id (first Carrd section)
     t._rootId = '';
 
     // scrollpoint state
-    t._pendingScrollHash = '';     // '#test' we want Carrd to use
-    t._pendingScrollSection = '';  // 'page' (canonical) for masking
+    t._pendingScrollHash = '';
+    t._pendingScrollSection = '';
     t._reassertArmed = 0;
 
-    // guard window to prevent Carrd clearing the scroll hash in the URL
+    // guard window
     t._lastScrollHash = '';
     t._lastScrollSection = '';
     t._lastScrollAt = 0;
-    t.SCROLL_GUARD_MS = 2500; // adjust if Carrd clears later than this
+    t.SCROLL_GUARD_MS = 2500;
 
     (d.readyState === 'loading'
       ? d.addEventListener.bind(d, 'DOMContentLoaded')
@@ -52,7 +49,6 @@ class HybridRouter {
     return `#${section.replaceAll('/', '--')}`;
   }
 
-  // Carrd scrollpoints are elements with data-scroll-id="test"
   isScrollPointHash(hash) {
     const raw = String(hash || '');
     if (!raw || raw === '#') return false;
@@ -60,14 +56,12 @@ class HybridRouter {
     return !!document.querySelector(`[data-scroll-id="${id}"]`);
   }
 
-  // Prefer canonical section from history.state; fallback to pathname.
   currentSectionCanonical() {
     const s = history.state?.section;
     if (typeof s === 'string') return s;
     return this.sectionFromPath(this.l.pathname) || '';
   }
 
-  // Normalize a URL arg (can be relative or absolute) into an absolute URL object
   _toUrl(urlLike) {
     try {
       return new URL(String(urlLike), this.o + '/');
@@ -76,7 +70,17 @@ class HybridRouter {
     }
   }
 
-  // Patch history.replaceState/pushState so Carrd can't clear #test immediately after scroll
+  // NEW: restore /section#hash a few times (does NOT trigger scroll)
+  restoreMaskedUrlBurst(section, hash) {
+    const t = this;
+    const delays = [0, 50, 120, 250, 450]; // 5 tries
+    for (const dly of delays) {
+      setTimeout(() => {
+        t._origReplaceState({ section }, '', `${t.o}/${section || ''}${hash || ''}`);
+      }, dly);
+    }
+  }
+
   patchHistoryForScrollpoints() {
     const t = this;
     const h = t.h;
@@ -92,24 +96,16 @@ class HybridRouter {
         t._lastScrollHash &&
         (now - t._lastScrollAt) <= t.SCROLL_GUARD_MS;
 
-      if (!inGuard) {
-        return origFn(state, title, url);
-      }
+      if (!inGuard) return origFn(state, title, url);
 
       const rawUrl = String(url);
 
       // Carrd often clears with url === '#'
-      // When url is only a hash (or empty), DO NOT allow it to wipe the path or hash.
-      // Restore to the *current path* (or last scroll section path) + last scroll hash.
       const isHashOnly = rawUrl.trim().startsWith('#') || rawUrl.trim() === '';
 
       if (isHashOnly) {
-        // Pick the most correct path to keep.
-        // Prefer the current location path, but if we have lastScrollSection,
-        // ensure we keep that section path.
         const path =
           (t._lastScrollSection ? `/${t._lastScrollSection}` : t.l.pathname) || '/';
-
         const fixed = `${t.o}${path}${t._lastScrollHash}`;
         return origFn(state, title, fixed);
       }
@@ -121,16 +117,13 @@ class HybridRouter {
       const hashCleared = (u.hash === '' || u.hash === '#');
 
       if (hashCleared) {
-        // Determine the canonical section from the URL path Carrd is writing
         const pathSection = t.sectionFromPath(u.pathname) || '';
-
-        // Preserve only if it matches the same section context we just scrolled within.
         const shouldPreserve =
           pathSection === (t._lastScrollSection || '') ||
           u.pathname === t.l.pathname;
 
         if (shouldPreserve) {
-          u.hash = t._lastScrollHash; // restore '#test'
+          u.hash = t._lastScrollHash;
           url = u.toString();
         }
       }
@@ -138,12 +131,10 @@ class HybridRouter {
       return origFn(state, title, url);
     };
 
-    // Install wrappers
     h.replaceState = wrap(t._origReplaceState);
     h.pushState = wrap(t._origPushState);
   }
 
-  // Mask URL to /section#hash (using original replaceState)
   maskUrl(section, hash) {
     this._origReplaceState({ section }, '', `${this.o}/${section || ''}${hash || ''}`);
   }
@@ -165,8 +156,6 @@ class HybridRouter {
     const t = this, l = t.l, o = t.o, ms = t.SETTLE_MS;
 
     t._rootId = t.detectRootId();
-
-    // Install the “don’t clear scrollpoint hash” wrapper
     t.patchHistoryForScrollpoints();
 
     const settleClean = (section) => setTimeout(() => {
@@ -190,13 +179,11 @@ class HybridRouter {
       const href = a.getAttribute('href') || '#';
       if (!href || href === '#') return;
 
-      // Scrollpoint intent
       if (t.isScrollPointHash(href)) {
         t._pendingScrollHash = href;
         t._pendingScrollSection = t.currentSectionCanonical();
         t._reassertArmed = 1;
 
-        // After Carrd processes click, if it didn't leave us at '#test', reassert once
         setTimeout(() => {
           if (!t._reassertArmed) return;
           if (l.hash === t._pendingScrollHash) {
@@ -204,13 +191,13 @@ class HybridRouter {
             return;
           }
           t._reassertArmed = 0;
-          l.hash = t._pendingScrollHash; // triggers Carrd's native scroll animation
+          l.hash = t._pendingScrollHash;
         }, 0);
 
         return;
       }
 
-      // Section navigation (original)
+      // Section navigation
       e.preventDefault();
       const s = (href === '#' || href === '') ? '' : t.sectionFromHash(href);
       t.drive(s, 1);
@@ -220,31 +207,38 @@ class HybridRouter {
     t.aEL('hashchange', () => {
       if (t._driving) return;
 
+      const now = Date.now();
+      const inGuard =
+        t._lastScrollHash &&
+        (now - t._lastScrollAt) <= t.SCROLL_GUARD_MS;
+
+      // ✅ NEW: if Carrd clears the hash after a scrollpoint, restore it (burst).
+      if (inGuard && (!l.hash || l.hash === '#')) {
+        const section = t._lastScrollSection || t.currentSectionCanonical();
+        t.restoreMaskedUrlBurst(section, t._lastScrollHash);
+        return;
+      }
+
       if (l.hash === '#') return t.drive('', 0);
 
-      // Scrollpoint hash: Carrd scrolls natively.
       if (t.isScrollPointHash(l.hash)) {
         const section = t._pendingScrollSection || t.currentSectionCanonical();
         const hash = l.hash;
 
-        // Arm the guard so Carrd can't clear the hash from the URL right after scroll
         t._lastScrollHash = hash;
         t._lastScrollSection = section;
         t._lastScrollAt = Date.now();
 
-        // Mask immediately to /page#test
-        setTimeout(() => {
-          t.maskUrl(section, hash);
-        }, 0);
+        // Mask immediately
+        setTimeout(() => t.maskUrl(section, hash), 0);
 
         return;
       }
 
-      // Normal section hash => clean URL
       settleClean(t.sectionFromHash(l.hash));
     });
 
-    // Back / Forward (original)
+    // Back / Forward
     t.aEL('popstate', (e) => {
       if (t._driving) return;
       t.drive(
