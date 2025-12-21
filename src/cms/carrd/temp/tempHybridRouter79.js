@@ -282,4 +282,5 @@ class HybridRouter {
   }
 }
 
-export default new HybridRouter();
+window.hybridRouter = new HybridRouter();
+export default window.hybridRouter;
