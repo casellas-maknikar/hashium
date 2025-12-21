@@ -36,7 +36,7 @@ class HybridRouter {
     return `#${section.replaceAll('/', '--')}`;
   }
 
-  // FEATURE #1 helper: detect Carrd scrollpoints by data-scroll-id
+  // NEW: is this hash a Carrd scrollpoint?
   isScrollPoint(hash) {
     const raw = String(hash || '');
     if (!raw || raw === '#') return false;
@@ -83,9 +83,19 @@ class HybridRouter {
 
       const href = a.getAttribute('href') || '#';
 
-      // ✅ FEATURE #2: If it's a scrollpoint, let Carrd handle the real hash '#test'
-      // (no preventDefault, no drive). Carrd will scroll only if it actually sees '#test'.
-      if (t.isScrollPoint(href)) return;
+      // ✅ FEATURE 2 (REVISED): scrollpoint clicks must still become "/#test"
+      // so Carrd scrolls, BUT we must block Carrd's click handler from converting
+      // it to "#page" / section navigation.
+      if (href && href !== '#' && t.isScrollPoint(href)) {
+        e.preventDefault();
+        e.stopImmediatePropagation(); // critical: stop Carrd click logic
+
+        // set REAL hash so Carrd scrolls
+        l.hash = href;
+
+        // (Feature 1) hashchange will mask the URL to /page#test
+        return;
+      }
 
       e.preventDefault();
 
@@ -100,10 +110,9 @@ class HybridRouter {
 
       if (l.hash === '#') return t.drive('', 0);
 
-      // ✅ FEATURE #1 (already validated): if it's a scrollpoint,
-      // keep the REAL hash for Carrd, but mask the visible URL to /page#test
+      // ✅ FEATURE 1: if it's a scrollpoint, keep the REAL hash (Carrd scroll),
+      // then mask visible URL to /<current-section>#<scroll-id>
       if (t.isScrollPoint(l.hash)) {
-        // Let Carrd react to the hash first, then rewrite the visible URL.
         setTimeout(() => {
           const section = t.sectionFromPath(l.pathname) || '';
           rS({ section }, '', `${o}/${section || ''}${l.hash}`);
