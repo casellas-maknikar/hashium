@@ -1,55 +1,49 @@
 class HybridRouter {
   constructor() {
-    const w = window;
-    this.l = w.location;
-    this.h = w.history;
-    this.o = this.l.origin;
-    this.rS = this.h.replaceState.bind(this.h);
+    const w = window, l = w.location, h = w.history;
+    this.l = l;
+    this.o = l.origin;
+    this.rS = h.replaceState.bind(h);
     this.aEL = w.addEventListener.bind(w);
-
     this.SETTLE_MS = 450;
     this._driving = false;
 
-    const init = () => this.init();
+    const i = () => this.init();
     w.document.readyState === 'loading'
-      ? document.addEventListener('DOMContentLoaded', init, { once: true })
-      : init();
+      ? document.addEventListener('DOMContentLoaded', i, { once: true })
+      : i();
   }
 
-  path = s => String(s || '').replaceAll('--', '/');
-  unpath = s => String(s || '').replaceAll('/', '--');
-  sectionFromHash = h => this.path(String(h || '').slice(1));
-  sectionFromPathname = p => decodeURIComponent(String(p || '').replace(/^\/+/, ''));
-  hashFor = s => (s ? `#${this.unpath(s)}` : '#');
-  cleanUrl = s => `${this.o}/${s || ''}`;
-  settle = fn => setTimeout(fn, this.SETTLE_MS);
+  sectionFromHash = h =>
+    String(h || '').slice(1).replaceAll('--', '/');
 
-  cleanTo(section) {
-    this.rS({ section }, '', this.cleanUrl(section));
-  }
+  sectionFromPath = p =>
+    decodeURIComponent(String(p || '').replace(/^\/+/, ''));
 
   drive(section, push) {
     this._driving = true;
-    const target = this.hashFor(section);
+    push
+      ? (this.l.hash = section ? `#${section.replaceAll('/', '--')}` : '#')
+      : this.l.replace(section ? `#${section.replaceAll('/', '--')}` : '#');
 
-    push ? (this.l.hash = target) : this.l.replace(target);
-
-    this.settle(() => {
-      this.cleanTo(section);
+    setTimeout(() => {
+      this.rS({ section }, '', `${this.o}/${section || ''}`);
       this._driving = false;
-    });
+    }, this.SETTLE_MS);
   }
 
   init() {
-    // Initial load
-    if ((!this.l.hash || this.l.hash === '#') && this.l.pathname !== '/') {
-      this.drive(this.sectionFromPathname(this.l.pathname), false);
+    const l = this.l;
+
+    // Initial entry
+    if ((!l.hash || l.hash === '#') && l.pathname !== '/') {
+      this.drive(this.sectionFromPath(l.pathname), false);
     } else {
-      const s = this.sectionFromHash(this.l.hash);
-      this.settle(() => this.cleanTo(s));
+      const s = this.sectionFromHash(l.hash);
+      setTimeout(() => this.rS({ section: s }, '', `${this.o}/${s || ''}`), this.SETTLE_MS);
     }
 
-    // Click interception
+    // Click
     this.aEL(
       'click',
       e => {
@@ -61,21 +55,22 @@ class HybridRouter {
       true
     );
 
-    // Hash change cleanup
+    // Hash cleanup
     this.aEL('hashchange', () => {
       if (this._driving) return;
-      const s = this.sectionFromHash(this.l.hash);
-      this.settle(() => this.cleanTo(s));
+      const s = this.sectionFromHash(l.hash);
+      setTimeout(() => this.rS({ section: s }, '', `${this.o}/${s || ''}`), this.SETTLE_MS);
     });
 
     // Back / Forward
     this.aEL('popstate', e => {
       if (this._driving) return;
-      const s =
+      this.drive(
         typeof e.state?.section === 'string'
           ? e.state.section
-          : this.sectionFromPathname(this.l.pathname);
-      this.drive(s, false);
+          : this.sectionFromPath(l.pathname),
+        false
+      );
     });
   }
 }
