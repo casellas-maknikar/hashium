@@ -7,7 +7,7 @@ class HybridRouter {
     t.rS = h.replaceState.bind(h);
     t.pS = h.pushState.bind(h);
     t.aEL = w.addEventListener.bind(w);
-    t.SETTLE_MS = 150;
+    t.SETTLE_MS = 75;
     t._driving = 0;
 
     // detected root section id (first Carrd section)
