@@ -5,6 +5,9 @@ class HybridRouter {
     t.o = l.origin;
     t.h = h;
 
+    // Toggle to 1 if you want console logs
+    t.DEBUG = 0;
+
     // Keep originals (we will wrap history methods)
     t._origReplaceState = h.replaceState.bind(h);
     t._origPushState = h.pushState.bind(h);
@@ -17,21 +20,26 @@ class HybridRouter {
     t._rootId = '';
 
     // scrollpoint state
-    t._pendingScrollHash = '';
-    t._pendingScrollSection = '';
+    t._pendingScrollHash = '';     // '#test' we want Carrd to use
+    t._pendingScrollSection = '';  // 'page' (canonical) for masking
     t._reassertArmed = 0;
 
     // guard window
     t._lastScrollHash = '';
     t._lastScrollSection = '';
     t._lastScrollAt = 0;
-    t.SCROLL_GUARD_MS = 2500;
+    t.SCROLL_GUARD_MS = 3500;
+
+    // watchdog handle
+    t._watchdogTimer = 0;
 
     (d.readyState === 'loading'
       ? d.addEventListener.bind(d, 'DOMContentLoaded')
       : (f) => f()
     )(() => t.init(), { once: 1 });
   }
+
+  log(...args) { if (this.DEBUG) console.log('[HybridRouter]', ...args); }
 
   sectionFromHash(h) { return String(h || '').slice(1).replaceAll('--', '/'); }
   sectionFromPath(p) { return decodeURIComponent(String(p || '').replace(/^\/+/, '')); }
@@ -49,6 +57,7 @@ class HybridRouter {
     return `#${section.replaceAll('/', '--')}`;
   }
 
+  // Carrd scrollpoints are elements with data-scroll-id="test"
   isScrollPointHash(hash) {
     const raw = String(hash || '');
     if (!raw || raw === '#') return false;
@@ -63,22 +72,52 @@ class HybridRouter {
   }
 
   _toUrl(urlLike) {
-    try {
-      return new URL(String(urlLike), this.o + '/');
-    } catch {
-      return null;
-    }
+    try { return new URL(String(urlLike), this.o + '/'); }
+    catch { return null; }
   }
 
-  // NEW: restore /section#hash a few times (does NOT trigger scroll)
-  restoreMaskedUrlBurst(section, hash) {
+  // ✅ Watchdog: keep /page#test visible even if Carrd keeps clearing it post-scroll
+  startScrollpointWatchdog(section, hash) {
     const t = this;
-    const delays = [0, 50, 120, 250, 450]; // 5 tries
-    for (const dly of delays) {
-      setTimeout(() => {
-        t._origReplaceState({ section }, '', `${t.o}/${section || ''}${hash || ''}`);
-      }, dly);
-    }
+    const start = Date.now();
+    const MAX_MS = 3000;       // watch for 3s after scroll
+    const TICK_MS = 80;        // check ~12x/sec
+    let stableTicks = 0;       // stop once it stays correct a bit
+
+    if (t._watchdogTimer) clearInterval(t._watchdogTimer);
+
+    t._watchdogTimer = setInterval(() => {
+      const elapsed = Date.now() - start;
+
+      // stop conditions
+      if (elapsed > MAX_MS) {
+        clearInterval(t._watchdogTimer);
+        t._watchdogTimer = 0;
+        t.log('watchdog stop: timeout');
+        return;
+      }
+
+      const want = `${t.o}/${section || ''}${hash}`;
+      const have = t.l.href;
+
+      // If URL already correct, count stability and stop after a few ticks
+      if (have === want) {
+        stableTicks++;
+        if (stableTicks >= 8) { // ~8 * 80ms = 640ms stable
+          clearInterval(t._watchdogTimer);
+          t._watchdogTimer = 0;
+          t.log('watchdog stop: stable');
+        }
+        return;
+      }
+
+      stableTicks = 0;
+
+      // If hash got cleared or changed away, restore visible URL (no re-scroll)
+      // We *do not* touch location.hash here.
+      t._origReplaceState({ section }, '', want);
+      t.log('watchdog restore ->', want);
+    }, TICK_MS);
   }
 
   patchHistoryForScrollpoints() {
@@ -86,7 +125,7 @@ class HybridRouter {
     const h = t.h;
 
     const wrap = (origFn) => function (state, title, url) {
-      // If no URL passed, just forward.
+      // If no URL passed, forward.
       if (typeof url !== 'string' && !(url instanceof String)) {
         return origFn(state, title, url);
       }
@@ -98,24 +137,20 @@ class HybridRouter {
 
       if (!inGuard) return origFn(state, title, url);
 
-      const rawUrl = String(url);
+      const rawUrl = String(url).trim();
 
-      // Carrd often clears with url === '#'
-      const isHashOnly = rawUrl.trim().startsWith('#') || rawUrl.trim() === '';
-
-      if (isHashOnly) {
-        const path =
-          (t._lastScrollSection ? `/${t._lastScrollSection}` : t.l.pathname) || '/';
+      // If Carrd writes hash-only URLs (like '#'), preserve path + last scroll hash
+      if (rawUrl === '' || rawUrl.startsWith('#')) {
+        const path = (t._lastScrollSection ? `/${t._lastScrollSection}` : t.l.pathname) || '/';
         const fixed = `${t.o}${path}${t._lastScrollHash}`;
+        t.log('history wrapper: hash-only ->', rawUrl, 'fixed ->', fixed);
         return origFn(state, title, fixed);
       }
 
       const u = t._toUrl(url);
       if (!u) return origFn(state, title, url);
 
-      // Treat BOTH "" and "#" as "hash cleared" inside guard window.
       const hashCleared = (u.hash === '' || u.hash === '#');
-
       if (hashCleared) {
         const pathSection = t.sectionFromPath(u.pathname) || '';
         const shouldPreserve =
@@ -125,6 +160,7 @@ class HybridRouter {
         if (shouldPreserve) {
           u.hash = t._lastScrollHash;
           url = u.toString();
+          t.log('history wrapper: cleared-hash -> restored ->', url);
         }
       }
 
@@ -179,6 +215,7 @@ class HybridRouter {
       const href = a.getAttribute('href') || '#';
       if (!href || href === '#') return;
 
+      // Scrollpoint intent
       if (t.isScrollPointHash(href)) {
         t._pendingScrollHash = href;
         t._pendingScrollSection = t.currentSectionCanonical();
@@ -191,13 +228,14 @@ class HybridRouter {
             return;
           }
           t._reassertArmed = 0;
-          l.hash = t._pendingScrollHash;
+          l.hash = t._pendingScrollHash; // let Carrd scroll natively
+          t.log('reassert hash ->', t._pendingScrollHash);
         }, 0);
 
         return;
       }
 
-      // Section navigation
+      // Section navigation (original)
       e.preventDefault();
       const s = (href === '#' || href === '') ? '' : t.sectionFromHash(href);
       t.drive(s, 1);
@@ -207,20 +245,9 @@ class HybridRouter {
     t.aEL('hashchange', () => {
       if (t._driving) return;
 
-      const now = Date.now();
-      const inGuard =
-        t._lastScrollHash &&
-        (now - t._lastScrollAt) <= t.SCROLL_GUARD_MS;
-
-      // ✅ NEW: if Carrd clears the hash after a scrollpoint, restore it (burst).
-      if (inGuard && (!l.hash || l.hash === '#')) {
-        const section = t._lastScrollSection || t.currentSectionCanonical();
-        t.restoreMaskedUrlBurst(section, t._lastScrollHash);
-        return;
-      }
-
       if (l.hash === '#') return t.drive('', 0);
 
+      // Scrollpoint hash: Carrd scrolls natively
       if (t.isScrollPointHash(l.hash)) {
         const section = t._pendingScrollSection || t.currentSectionCanonical();
         const hash = l.hash;
@@ -229,16 +256,22 @@ class HybridRouter {
         t._lastScrollSection = section;
         t._lastScrollAt = Date.now();
 
-        // Mask immediately
-        setTimeout(() => t.maskUrl(section, hash), 0);
+        // Mask immediately to /page#test
+        setTimeout(() => {
+          t.maskUrl(section, hash);
+        }, 0);
+
+        // ✅ Start watchdog to defeat later Carrd URL cleanup
+        t.startScrollpointWatchdog(section, hash);
 
         return;
       }
 
+      // Normal section hash => clean URL
       settleClean(t.sectionFromHash(l.hash));
     });
 
-    // Back / Forward
+    // Back / Forward (original)
     t.aEL('popstate', (e) => {
       if (t._driving) return;
       t.drive(
