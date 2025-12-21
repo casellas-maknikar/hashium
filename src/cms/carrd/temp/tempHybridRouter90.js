@@ -161,6 +161,11 @@ class HybridRouter {
     requestAnimationFrame(() => requestAnimationFrame(run));
   }
 
+  // ✅ Base section entry should restore to top
+  scrollToSectionTop() {
+    window.scrollTo(0, 0);
+  }
+
   // Write URL/state for scrollpoints
   // Option B: invisible scrollpoints still store scrollId in state,
   // but URL remains clean (/page).
@@ -224,6 +229,7 @@ class HybridRouter {
       // Always keep state correct; push only when target changes
       t.writeScrollUrl(section, href, invisible, push);
 
+      // Always scroll
       t.scrollToEl(el);
     };
 
@@ -303,7 +309,9 @@ class HybridRouter {
       settleClean(t.sectionFromHash(l.hash));
     });
 
-    // Back / Forward: restore scrollpoint position from history state (including invisible)
+    // -----------------------------
+    // Back / Forward: restore scrollpoint or section top
+    // -----------------------------
     t.aEL('popstate', (e) => {
       if (t._driving) return;
 
@@ -315,22 +323,25 @@ class HybridRouter {
       const scrollId = typeof e.state?.scrollId === 'string' ? e.state.scrollId : '';
       const hash = scrollId ? `#${scrollId}` : '';
 
+      // Ensure section is correct
       t.drive(section, 0);
 
-      if (scrollId) {
-        setTimeout(() => {
+      // After Carrd settles, restore position
+      setTimeout(() => {
+        if (scrollId) {
           const el = t.getScrollElFromHash(hash);
           if (el) t.scrollToEl(el);
 
-          // Restore URL for this history entry:
-          // - invisible => /page
-          // - visible => /page#id
           const invisible = el ? t.isInvisibleScrollPoint(el) : false;
           t.writeScrollUrl(section, hash, invisible, false);
-        }, ms + 30);
-      } else {
-        t.rS({ section }, '', `${t.o}/${section || ''}`);
-      }
+        } else {
+          // ✅ Base section state => go to top
+          t.scrollToSectionTop();
+
+          // Ensure base state + clean URL
+          t.rS({ section, scrollId: '' }, '', `${t.o}/${section || ''}`);
+        }
+      }, ms + 30);
     });
   }
 }
