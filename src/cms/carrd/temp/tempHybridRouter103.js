@@ -1,24 +1,3 @@
-/*
- * Modified HybridRouter for Carrd
- *
- * This implementation builds on the validated HybridRouter logic but
- * addresses two key issues reported during integration tests:
- *   1. When navigating from a fragment (scrollpoint) to a section and then
- *      using the browser back button, the page would scroll to the top of
- *      the section instead of restoring to the original scrollpoint. This
- *      occurred because the popstate handler always called `drive()` which
- *      normalised the hash to the base section (#section) before the scroll
- *      restoration logic ran. The updated implementation skips the call
- *      to `drive()` when the history entry includes a `scrollId`, allowing
- *      the browser to preserve the fragment hash and restore to the correct
- *      position.
- *   2. Navigating directly between fragments required the user to scroll
- *      back to the top of the section first. By decoupling the hash
- *      normalisation from fragment restores, fragment-to-fragment
- *      navigation now scrolls smoothly between targets without an
- *      intermediate jump to the section top.
- */
-
 class HybridRouter {
   constructor() {
     const w = window, d = w.document, l = w.location, h = w.history, t = this;
@@ -205,8 +184,24 @@ class HybridRouter {
     return !(curSection === section && curScrollId === scrollId);
   }
 
+  // ✅ Avoid section history spam: don't push if already on that section (and no scrollpoint)
+  shouldPushSection(section) {
+    const cs = history.state || {};
+    const curSection =
+      typeof cs.section === 'string'
+        ? cs.section
+        : (this.sectionFromPath(this.l.pathname) || '');
+    const curScrollId = typeof cs.scrollId === 'string' ? cs.scrollId : '';
+    return !(curSection === section && curScrollId === '');
+  }
+
   drive(section, push) {
     const t = this, l = t.l, ms = t.SETTLE_MS;
+
+    // ✅ Safety net: if we're already on this section and this is a "section" entry,
+    // downgrade push to replace so history doesn't spam.
+    if (push && !t.shouldPushSection(section || '')) push = 0;
+
     t._driving = 1;
 
     const hh = t.hashFor(section);
@@ -275,16 +270,13 @@ class HybridRouter {
     const initialEl = t.getScrollElFromHash(l.hash);
     if (initialEl) {
       const section = t.sectionFromPath(l.pathname) || '';
-
-      const initialHash = l.hash; // ✅ capture original fragment hash BEFORE drive() changes it
       const invisible = t.isInvisibleScrollPoint(initialEl);
 
       t.drive(section, 0);
 
       setTimeout(() => {
         t.scrollToEl(initialEl);
-        // ✅ use captured hash so /page#test3 stays /page#test3 (or stays clean if invisible)
-        t.writeScrollUrl(section, initialHash, invisible, false);
+        t.writeScrollUrl(section, l.hash, invisible, false);
       }, ms + 30);
 
       return;
@@ -303,7 +295,7 @@ class HybridRouter {
       if (l.hash === '#') t.drive('', 0);
     }
 
-    // Normal section click routing (original)
+    // Normal section click routing (anti-spam added)
     t.aEL('click', (e) => {
       if (Date.now() <= t._suppressClickUntil) return;
 
@@ -313,39 +305,32 @@ class HybridRouter {
 
       const href = a.getAttribute('href') || '#';
       const s = (href === '#' || href === '') ? '' : t.sectionFromHash(href);
-      t.drive(s, 1);
+
+      // ✅ Only push when section truly changes (and we're not in a scrollpoint state)
+      const push = t.shouldPushSection(s);
+      t.drive(s, push ? 1 : 0);
     }, 1);
 
-    // Hashchange: handle Carrd hash updates. We ignore scrollpoint hashes, but
-    // only apply clean-up to non-empty section hashes. An empty hash (e.g.
-    // navigating to a clean URL) should not trigger another clean, otherwise
-    // we’d regress to the root path after removing a section hash on refresh.
+    // Hashchange: ignore scrollpoints (we own them)
     t.aEL('hashchange', () => {
       if (t._driving) return;
 
-      const currentHash = l.hash;
-
-      // Normalize scrollpoint hashes via our own logic
-      const el = t.getScrollElFromHash(currentHash);
+      // If Carrd somehow sets a scrollpoint hash, normalize with REPLACE
+      const el = t.getScrollElFromHash(l.hash);
       if (el) {
         const section = t.currentSectionCanonical();
         const invisible = t.isInvisibleScrollPoint(el);
-        t.writeScrollUrl(section, currentHash, invisible, false);
+        t.writeScrollUrl(section, l.hash, invisible, false);
         t.scrollToEl(el);
         return;
       }
 
-      // If the hash is exactly '#', restore the root section
-      if (currentHash === '#') {
-        t.drive('', 0);
-        return;
-      }
+      // ✅ If hash is cleared ('' or '#'), do nothing here.
+      // (Prevents re-triggering section cleanup loops.)
+      if (!l.hash || l.hash === '#') return;
 
-      // If there is no hash (empty string), do nothing.
-      if (!currentHash) return;
-
-      // For a base section hash (e.g. '#page'), convert to clean path
-      settleClean(t.sectionFromHash(currentHash));
+      // Otherwise, it's a section hash: normalize to clean URL
+      settleClean(t.sectionFromHash(l.hash));
     });
 
     // -----------------------------
@@ -362,7 +347,7 @@ class HybridRouter {
       const scrollId = typeof e.state?.scrollId === 'string' ? e.state.scrollId : '';
       const hash = scrollId ? `#${scrollId}` : '';
 
-      // Base section restore => drive + top
+      // If there is no scrollId, this is a base section restore.
       if (!scrollId) {
         t.drive(section, 0);
         setTimeout(() => {
@@ -372,7 +357,7 @@ class HybridRouter {
         return;
       }
 
-      // Scroll restore => ensure correct section active, then scroll
+      // Ensure Carrd switches to the correct section before restoring scrollpoint.
       const sectionHash = t.hashFor(section);
       if (l.hash !== sectionHash) {
         t._driving = 1;
