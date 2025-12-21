@@ -57,29 +57,22 @@ class HybridRouter {
     this.rS({ section }, '', `${this.o}/${section || ''}${hash || ''}`);
   }
 
-  // NEW: wait until Carrd clears the hash, then restore /page#test
-  waitForHashClearThenRestore(section, hash) {
-    const t = this, l = t.l;
+  // NEW: brute-force restore attempts (5x) to beat Carrd timing/races
+  restoreFragmentBurst(section, hash) {
+    const t = this;
 
-    // If Carrd already cleared it, restore immediately
-    if (!l.hash || l.hash === '#') {
-      t.maskUrl(section, hash);
-      return;
+    // 5 attempts at increasing delays (tunable)
+    const delays = [0, 60, 120, 250, 450];
+
+    for (let i = 0; i < delays.length; i++) {
+      setTimeout(() => {
+        // Only restore if Carrd has cleared the hash OR changed it away from our scrollpoint.
+        // (If it's still '#test', no need.)
+        if (t.l.hash !== hash) {
+          t.maskUrl(section, hash);
+        }
+      }, delays[i]);
     }
-
-    let tries = 0;
-    const MAX_TRIES = 60; // ~60 * 50ms = 3s
-    const timer = setInterval(() => {
-      tries++;
-      if (!l.hash || l.hash === '#') {
-        clearInterval(timer);
-        t.maskUrl(section, hash);
-        return;
-      }
-      if (tries >= MAX_TRIES) {
-        clearInterval(timer);
-      }
-    }, 50);
   }
 
   drive(section, push) {
@@ -113,8 +106,6 @@ class HybridRouter {
     }
 
     // Click (cooperative)
-    // - Scrollpoints: let Carrd do its thing, but if it turns into '#page', reassert '#test' once.
-    // - Sections: your normal router behavior.
     t.aEL('click', (e) => {
       const a = e.target?.closest?.('a[href^="#"]');
       if (!a) return;
@@ -164,9 +155,8 @@ class HybridRouter {
           t.maskUrl(section, hash);
         }, 0);
 
-        // NEW: then wait for Carrd to clear it, and put it back in the URL
-        // using replaceState (no re-scroll).
-        t.waitForHashClearThenRestore(section, hash);
+        // NEW: try restoring 5 times to beat Carrd clearing it later
+        t.restoreFragmentBurst(section, hash);
 
         return;
       }
