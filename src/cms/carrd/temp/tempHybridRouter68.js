@@ -11,8 +11,10 @@ class HybridRouter {
     // detected root section id (first Carrd section)
     t._rootId = '';
 
-    // FEATURE 2: pending scrollpoint hash we want Carrd to see
-    t._pendingScrollHash = '';
+    // Secondary-fragment (scrollpoint) support state
+    t._pendingScrollHash = ''; // what we want Carrd to see (e.g. '#test')
+    t._lastScrollHash = '';    // last scrollpoint hash Carrd actually used
+    t._lastScrollAt = 0;       // timestamp when Carrd used it
 
     (d.readyState === 'loading'
       ? d.addEventListener.bind(d, 'DOMContentLoaded')
@@ -23,6 +25,7 @@ class HybridRouter {
   sectionFromHash(h) { return String(h || '').slice(1).replaceAll('--', '/'); }
   sectionFromPath(p) { return decodeURIComponent(String(p || '').replace(/^\/+/, '')); }
 
+  // detect first Carrd section id
   detectRootId() {
     const s =
       document.querySelector('#main section[id]') ||
@@ -31,16 +34,20 @@ class HybridRouter {
     return (s && s.id) ? s.id : 'home';
   }
 
+  // map canonical section -> Carrd-driving hash
+  // Canonical root is '' (clean URL "/"), but Carrd needs a real id to switch sections.
   hashFor(section) {
     if (!section) return `#${this._rootId}`;
     return `#${section.replaceAll('/', '--')}`;
   }
 
-  // scrollpoint = element with data-scroll-id="<id>"
+  // Is this hash a Carrd scrollpoint?
+  // Carrd scrollpoints are elements with data-scroll-id="<hash>"
   isScrollPoint(hash) {
     const raw = String(hash || '');
     if (!raw || raw === '#') return false;
-    const id = this.sectionFromHash(raw);
+    const id = this.sectionFromHash(raw); // '#test' -> 'test'
+    // Carrd scroll ids are typically simple; this selector is safe for your use case.
     return !!document.querySelector(`[data-scroll-id="${id}"]`);
   }
 
@@ -48,6 +55,7 @@ class HybridRouter {
     const t = this, l = t.l, ms = t.SETTLE_MS;
     t._driving = 1;
 
+    // use hashFor() so '#' drives the real root section
     const hh = t.hashFor(section);
     push ? (l.hash = hh) : l.replace(hh);
 
@@ -81,14 +89,13 @@ class HybridRouter {
 
       const href = a.getAttribute('href') || '#';
 
-      // ✅ FEATURE 2 (reassert): if user clicked a scrollpoint,
-      // Carrd is overwriting it to "#page". So we queue setting it back to "#test"
-      // right after this click completes.
+      // Scrollpoint click:
+      // Carrd only scrolls if the *real* hash becomes '#test', but Carrd also likes to
+      // override it to '#page'. So we let Carrd run, then re-assert '#test' immediately.
       if (href && href !== '#' && t.isScrollPoint(href)) {
         t._pendingScrollHash = href;
 
-        // Let Carrd do whatever it does for the click,
-        // then re-apply the scrollpoint hash so Carrd scrolls.
+        // Let Carrd do whatever it does for the click, then re-apply scrollpoint hash.
         setTimeout(() => {
           if (t._pendingScrollHash) l.hash = t._pendingScrollHash;
         }, 0);
@@ -96,20 +103,32 @@ class HybridRouter {
         return; // do NOT drive
       }
 
-      // section navigation (unchanged)
+      // Section navigation (unchanged)
       e.preventDefault();
+
       const s = (href === '#' || href === '') ? '' : t.sectionFromHash(href);
       t.drive(s, 1);
     }, 1);
 
-    // Hash cleanup
+    // Hash cleanup / secondary-fragment logic
     t.aEL('hashchange', () => {
       if (t._driving) return;
 
+      // FEATURE 3:
+      // Carrd sometimes clears scrollpoint hashes after scrolling (hash becomes '' or '#').
+      // If that happens shortly after a scrollpoint, restore the fragment in the visible URL
+      // WITHOUT changing location.hash (so we don't re-scroll or fight Carrd).
+      if ((!l.hash || l.hash === '#') && t._lastScrollHash && (Date.now() - t._lastScrollAt) < 1500) {
+        const section = t.sectionFromPath(l.pathname) || '';
+        rS({ section }, '', `${o}/${section || ''}${t._lastScrollHash}`);
+        return;
+      }
+
+      // '#' means canonical root; drive Carrd to actual root id (no new history)
       if (l.hash === '#') return t.drive('', 0);
 
-      // If a scrollpoint click is pending but Carrd changed hash to something else,
-      // re-assert it once more (prevents cases where Carrd sets "#page" after our setTimeout).
+      // If a scrollpoint click is pending but Carrd changed hash to something else
+      // (like '#page'), re-assert the scroll hash again.
       if (t._pendingScrollHash && l.hash !== t._pendingScrollHash) {
         setTimeout(() => {
           if (t._pendingScrollHash) l.hash = t._pendingScrollHash;
@@ -117,11 +136,15 @@ class HybridRouter {
         return;
       }
 
-      // ✅ FEATURE 1 (masking): when the hash is truly a scrollpoint, keep it,
-      // but rewrite the visible URL to /page#test instead of /test or /#test.
+      // FEATURE 1:
+      // If hash is a scrollpoint, let Carrd scroll using the real '#test',
+      // then mask the visible URL to '/page#test'.
       if (t.isScrollPoint(l.hash)) {
-        // clear pending (we successfully got the real scroll hash)
         t._pendingScrollHash = '';
+
+        // Record last scrollpoint so we can restore it if Carrd clears the hash later.
+        t._lastScrollHash = l.hash;
+        t._lastScrollAt = Date.now();
 
         setTimeout(() => {
           const section = t.sectionFromPath(l.pathname) || '';
@@ -131,6 +154,7 @@ class HybridRouter {
         return;
       }
 
+      // Normal section hash -> clean URL after Carrd switches sections
       settleClean(t.sectionFromHash(l.hash));
     });
 
