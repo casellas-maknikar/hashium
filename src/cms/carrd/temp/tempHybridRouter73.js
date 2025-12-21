@@ -11,12 +11,10 @@ class HybridRouter {
     // detected root section id (first Carrd section)
     t._rootId = '';
 
-    // "Work with Carrd" scrollpoint state
-    t._pendingScrollHash = '';    // '#test' we WANT Carrd to scroll to
-    t._pendingScrollSection = ''; // 'page' we want to mask as /page#test
-    t._reassertArmed = 0;         // allow 1 reassert per click
-    t._lastScrollHash = '';       // last scrollpoint hash Carrd actually used
-    t._lastScrollAt = 0;          // timestamp when Carrd used it
+    // scrollpoint state
+    t._pendingScrollHash = '';     // '#test'
+    t._pendingScrollSection = '';  // 'page'
+    t._reassertArmed = 0;
 
     (d.readyState === 'loading'
       ? d.addEventListener.bind(d, 'DOMContentLoaded')
@@ -40,7 +38,7 @@ class HybridRouter {
     return `#${section.replaceAll('/', '--')}`;
   }
 
-  // Scrollpoints are elements with data-scroll-id="test"
+  // Carrd scrollpoints are elements with data-scroll-id="test"
   isScrollPointHash(hash) {
     const raw = String(hash || '');
     if (!raw || raw === '#') return false;
@@ -57,6 +55,31 @@ class HybridRouter {
 
   maskUrl(section, hash) {
     this.rS({ section }, '', `${this.o}/${section || ''}${hash || ''}`);
+  }
+
+  // NEW: wait until Carrd clears the hash, then restore /page#test
+  waitForHashClearThenRestore(section, hash) {
+    const t = this, l = t.l;
+
+    // If Carrd already cleared it, restore immediately
+    if (!l.hash || l.hash === '#') {
+      t.maskUrl(section, hash);
+      return;
+    }
+
+    let tries = 0;
+    const MAX_TRIES = 60; // ~60 * 50ms = 3s
+    const timer = setInterval(() => {
+      tries++;
+      if (!l.hash || l.hash === '#') {
+        clearInterval(timer);
+        t.maskUrl(section, hash);
+        return;
+      }
+      if (tries >= MAX_TRIES) {
+        clearInterval(timer);
+      }
+    }, 50);
   }
 
   drive(section, push) {
@@ -80,9 +103,7 @@ class HybridRouter {
     const clean = (section) => rS({ section }, '', `${o}/${section || ''}`);
     const settleClean = (section) => setTimeout(() => clean(section), ms);
 
-    // --------------------------
-    // Initial entry (original behavior)
-    // --------------------------
+    // Initial entry (original)
     if ((!l.hash || l.hash === '#') && l.pathname !== '/') {
       t.drive(t.sectionFromPath(l.pathname), 0);
     } else {
@@ -91,12 +112,9 @@ class HybridRouter {
       if (l.hash === '#') t.drive('', 0);
     }
 
-    // --------------------------
-    // CLICK (cooperative)
-    // Don't preventDefault. Don't stop propagation.
-    // Just detect scrollpoint intent and, if Carrd misclassifies it,
-    // reassert '#test' ONCE after Carrd runs.
-    // --------------------------
+    // Click (cooperative)
+    // - Scrollpoints: let Carrd do its thing, but if it turns into '#page', reassert '#test' once.
+    // - Sections: your normal router behavior.
     t.aEL('click', (e) => {
       const a = e.target?.closest?.('a[href^="#"]');
       if (!a) return;
@@ -104,80 +122,60 @@ class HybridRouter {
       const href = a.getAttribute('href') || '#';
       if (!href || href === '#') return;
 
-      // If this click targets a scrollpoint, arm a one-time reassert.
+      // Scrollpoint intent
       if (t.isScrollPointHash(href)) {
-        t._pendingScrollHash = href;                 // '#test'
-        t._pendingScrollSection = t.currentSectionCanonical(); // 'page'
+        t._pendingScrollHash = href;
+        t._pendingScrollSection = t.currentSectionCanonical();
         t._reassertArmed = 1;
 
-        // After Carrd processes click, if it turned it into '#page' (or anything else),
-        // reassert '#test' so Carrd's own hashchange scrollpoint logic runs.
+        // After Carrd processes click, if it did NOT leave us at '#test', reassert once.
         setTimeout(() => {
           if (!t._reassertArmed) return;
-
-          // If Carrd already put us at the intended scroll hash, do nothing.
-          if (l.hash === t._pendingScrollHash) return;
-
-          // If Carrd replaced it with section hash (like '#page'), reassert once.
-          // This is a "workaround" not a fight: we still let Carrd do the scrolling.
+          if (l.hash === t._pendingScrollHash) {
+            t._reassertArmed = 0;
+            return;
+          }
           t._reassertArmed = 0;
           l.hash = t._pendingScrollHash;
         }, 0);
 
-        return;
+        return; // do not drive
       }
 
-      // Not a scrollpoint: keep your original section routing behavior.
-      // (This part DOES preventDefault, as your section system requires it.)
+      // Section navigation (original)
       e.preventDefault();
-
       const s = (href === '#' || href === '') ? '' : t.sectionFromHash(href);
       t.drive(s, 1);
     }, 1);
 
-    // --------------------------
-    // HASHCHANGE
-    // - If it's a scrollpoint: let Carrd scroll, then mask URL to /page#test
-    // - If Carrd clears hash after scrolling: restore masked /page#test in address bar
-    // --------------------------
+    // Hashchange
     t.aEL('hashchange', () => {
       if (t._driving) return;
 
-      // If Carrd clears the hash shortly after a scrollpoint scroll, restore masked URL
-      // WITHOUT touching location.hash (no re-scroll).
-      if ((!l.hash || l.hash === '#') && t._lastScrollHash && (Date.now() - t._lastScrollAt) < 1500) {
-        const section = t._pendingScrollSection || t.currentSectionCanonical();
-        t.maskUrl(section, t._lastScrollHash);
-        return;
-      }
-
-      // Root hash behavior (original)
       if (l.hash === '#') return t.drive('', 0);
 
-      // Scrollpoint hash: Carrd will scroll natively (with its variants).
+      // Scrollpoint hash: let Carrd scroll natively.
       if (t.isScrollPointHash(l.hash)) {
-        // Record so we can restore if Carrd clears it.
-        t._lastScrollHash = l.hash;
-        t._lastScrollAt = Date.now();
-
         const section = t._pendingScrollSection || t.currentSectionCanonical();
         const hash = l.hash;
 
-        // After Carrd scrolls, mask to /page#test without changing the hash.
+        // Mask immediately (so you see /page#test right away)
         setTimeout(() => {
           t.maskUrl(section, hash);
         }, 0);
 
+        // NEW: then wait for Carrd to clear it, and put it back in the URL
+        // using replaceState (no re-scroll).
+        t.waitForHashClearThenRestore(section, hash);
+
         return;
       }
 
-      // Otherwise treat as section hash (original)
+      // Normal section hash => clean URL
       settleClean(t.sectionFromHash(l.hash));
     });
 
-    // --------------------------
     // Back / Forward (original)
-    // --------------------------
     t.aEL('popstate', (e) => {
       if (t._driving) return;
       t.drive(
