@@ -8,8 +8,11 @@ class HybridRouter {
     t.SETTLE_MS = 450;
     t._driving = 0;
 
-    // NEW: detected root section id (first Carrd section)
+    // detected root section id (first Carrd section)
     t._rootId = '';
+
+    // FEATURE 2: pending scrollpoint hash we want Carrd to see
+    t._pendingScrollHash = '';
 
     (d.readyState === 'loading'
       ? d.addEventListener.bind(d, 'DOMContentLoaded')
@@ -20,7 +23,6 @@ class HybridRouter {
   sectionFromHash(h) { return String(h || '').slice(1).replaceAll('--', '/'); }
   sectionFromPath(p) { return decodeURIComponent(String(p || '').replace(/^\/+/, '')); }
 
-  // NEW: detect first Carrd section id
   detectRootId() {
     const s =
       document.querySelector('#main section[id]') ||
@@ -29,18 +31,16 @@ class HybridRouter {
     return (s && s.id) ? s.id : 'home';
   }
 
-  // NEW: map canonical section -> Carrd-driving hash
-  // Canonical root is '' (clean URL "/"), but Carrd needs a real id to switch sections.
   hashFor(section) {
     if (!section) return `#${this._rootId}`;
     return `#${section.replaceAll('/', '--')}`;
   }
 
-  // NEW: is this hash a Carrd scrollpoint?
+  // scrollpoint = element with data-scroll-id="<id>"
   isScrollPoint(hash) {
     const raw = String(hash || '');
     if (!raw || raw === '#') return false;
-    const id = this.sectionFromHash(raw); // '#test' -> 'test'
+    const id = this.sectionFromHash(raw);
     return !!document.querySelector(`[data-scroll-id="${id}"]`);
   }
 
@@ -48,7 +48,6 @@ class HybridRouter {
     const t = this, l = t.l, ms = t.SETTLE_MS;
     t._driving = 1;
 
-    // CHANGED: use hashFor() so '#' drives the real root section
     const hh = t.hashFor(section);
     push ? (l.hash = hh) : l.replace(hh);
 
@@ -61,13 +60,12 @@ class HybridRouter {
   init() {
     const t = this, l = t.l, o = t.o, rS = t.rS, ms = t.SETTLE_MS;
 
-    // NEW: learn root section id once
     t._rootId = t.detectRootId();
 
     const clean = (section) => rS({ section }, '', `${o}/${section || ''}`);
     const settleClean = (section) => setTimeout(() => clean(section), ms);
 
-    // Initial entry (UNCHANGED)
+    // Initial entry (unchanged)
     if ((!l.hash || l.hash === '#') && l.pathname !== '/') {
       t.drive(t.sectionFromPath(l.pathname), 0);
     } else {
@@ -83,23 +81,23 @@ class HybridRouter {
 
       const href = a.getAttribute('href') || '#';
 
-      // ✅ FEATURE 2 (REVISED): scrollpoint clicks must still become "/#test"
-      // so Carrd scrolls, BUT we must block Carrd's click handler from converting
-      // it to "#page" / section navigation.
+      // ✅ FEATURE 2 (reassert): if user clicked a scrollpoint,
+      // Carrd is overwriting it to "#page". So we queue setting it back to "#test"
+      // right after this click completes.
       if (href && href !== '#' && t.isScrollPoint(href)) {
-        e.preventDefault();
-        e.stopImmediatePropagation(); // critical: stop Carrd click logic
+        t._pendingScrollHash = href;
 
-        // set REAL hash so Carrd scrolls
-        l.hash = href;
+        // Let Carrd do whatever it does for the click,
+        // then re-apply the scrollpoint hash so Carrd scrolls.
+        setTimeout(() => {
+          if (t._pendingScrollHash) l.hash = t._pendingScrollHash;
+        }, 0);
 
-        // (Feature 1) hashchange will mask the URL to /page#test
-        return;
+        return; // do NOT drive
       }
 
+      // section navigation (unchanged)
       e.preventDefault();
-
-      // '#' means canonical root section ''
       const s = (href === '#' || href === '') ? '' : t.sectionFromHash(href);
       t.drive(s, 1);
     }, 1);
@@ -110,20 +108,33 @@ class HybridRouter {
 
       if (l.hash === '#') return t.drive('', 0);
 
-      // ✅ FEATURE 1: if it's a scrollpoint, keep the REAL hash (Carrd scroll),
-      // then mask visible URL to /<current-section>#<scroll-id>
+      // If a scrollpoint click is pending but Carrd changed hash to something else,
+      // re-assert it once more (prevents cases where Carrd sets "#page" after our setTimeout).
+      if (t._pendingScrollHash && l.hash !== t._pendingScrollHash) {
+        setTimeout(() => {
+          if (t._pendingScrollHash) l.hash = t._pendingScrollHash;
+        }, 0);
+        return;
+      }
+
+      // ✅ FEATURE 1 (masking): when the hash is truly a scrollpoint, keep it,
+      // but rewrite the visible URL to /page#test instead of /test or /#test.
       if (t.isScrollPoint(l.hash)) {
+        // clear pending (we successfully got the real scroll hash)
+        t._pendingScrollHash = '';
+
         setTimeout(() => {
           const section = t.sectionFromPath(l.pathname) || '';
           rS({ section }, '', `${o}/${section || ''}${l.hash}`);
         }, 0);
+
         return;
       }
 
       settleClean(t.sectionFromHash(l.hash));
     });
 
-    // Back / Forward (UNCHANGED)
+    // Back / Forward (unchanged)
     t.aEL('popstate', (e) => {
       if (t._driving) return;
       t.drive(
