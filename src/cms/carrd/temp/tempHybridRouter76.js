@@ -96,23 +96,41 @@ class HybridRouter {
         return origFn(state, title, url);
       }
 
+      const rawUrl = String(url);
+
+      // Carrd often clears with url === '#'
+      // When url is only a hash (or empty), DO NOT allow it to wipe the path or hash.
+      // Restore to the *current path* (or last scroll section path) + last scroll hash.
+      const isHashOnly = rawUrl.trim().startsWith('#') || rawUrl.trim() === '';
+
+      if (isHashOnly) {
+        // Pick the most correct path to keep.
+        // Prefer the current location path, but if we have lastScrollSection,
+        // ensure we keep that section path.
+        const path =
+          (t._lastScrollSection ? `/${t._lastScrollSection}` : t.l.pathname) || '/';
+
+        const fixed = `${t.o}${path}${t._lastScrollHash}`;
+        return origFn(state, title, fixed);
+      }
+
       const u = t._toUrl(url);
       if (!u) return origFn(state, title, url);
 
-      // If Carrd is trying to remove the hash (no '#') while we are in guard window,
-      // keep the last scroll hash ONLY when we're still on the same section.
-      const hasHash = !!u.hash;
+      // Treat BOTH "" and "#" as "hash cleared" inside guard window.
+      const hashCleared = (u.hash === '' || u.hash === '#');
 
-      if (!hasHash) {
+      if (hashCleared) {
         // Determine the canonical section from the URL path Carrd is writing
         const pathSection = t.sectionFromPath(u.pathname) || '';
+
+        // Preserve only if it matches the same section context we just scrolled within.
         const shouldPreserve =
           pathSection === (t._lastScrollSection || '') ||
-          // Also allow preserving if Carrd writes the same pathname we are currently on
           u.pathname === t.l.pathname;
 
         if (shouldPreserve) {
-          u.hash = t._lastScrollHash; // append '#test'
+          u.hash = t._lastScrollHash; // restore '#test'
           url = u.toString();
         }
       }
@@ -148,7 +166,7 @@ class HybridRouter {
 
     t._rootId = t.detectRootId();
 
-    // 🔧 Install the “don’t clear scrollpoint hash” wrapper
+    // Install the “don’t clear scrollpoint hash” wrapper
     t.patchHistoryForScrollpoints();
 
     const settleClean = (section) => setTimeout(() => {
@@ -165,8 +183,6 @@ class HybridRouter {
     }
 
     // Click (cooperative)
-    // - Scrollpoints: let Carrd handle scrolling, but if it rewrites to '#page', reassert '#test' once
-    // - Sections: your normal drive behavior
     t.aEL('click', (e) => {
       const a = e.target?.closest?.('a[href^="#"]');
       if (!a) return;
