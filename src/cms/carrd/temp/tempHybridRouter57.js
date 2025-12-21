@@ -8,10 +8,9 @@ class HybridRouter {
 
     t.SETTLE_MS = 450;
 
-    // navigation/cleanup control
-    t._driving = 0;     // truthy while we are actively driving Carrd + pending cleanup
-    t._tok = 0;         // monotonic token; newest navigation wins
-    t._timer = 0;       // active cleanup timeout id
+    t._driving = 0;
+    t._tok = 0;
+    t._timer = 0;
 
     const i = () => t.init();
     d.readyState === 'loading'
@@ -19,29 +18,51 @@ class HybridRouter {
       : i();
   }
 
-  sectionFromHash(h) { return String(h || '').slice(1).replaceAll('--', '/'); }
-  sectionFromPath(p) { return decodeURIComponent(String(p || '').replace(/^\/+/, '')); }
+  sectionFromHash(h) {
+    // Carrd home can be "#" or "" => canonical section = ""
+    const raw = String(h || '');
+    if (!raw || raw === '#') return '';
+    return raw.slice(1).replaceAll('--', '/');
+  }
 
-  // Schedules "clean current entry" so only the latest navigation can win.
+  sectionFromPath(p) {
+    return decodeURIComponent(String(p || '').replace(/^\/+/, ''));
+  }
+
+  _driveHash(section, push) {
+    const t = this, l = t.l;
+
+    // HOME: remove hash entirely (works even if home is unnamed)
+    if (!section) {
+      if (push) l.hash = ''; // creates one entry when coming from a section
+      else l.replace(l.pathname + l.search); // no new entry, fragment-only navigation
+      return;
+    }
+
+    const hh = `#${section.replaceAll('/', '--')}`;
+    push ? (l.hash = hh) : l.replace(hh);
+  }
+
+  _clean(section) {
+    this.rS({ section }, '', `${this.o}/${section || ''}`);
+  }
+
   _scheduleClean(section) {
     const t = this, tok = ++t._tok;
     if (t._timer) clearTimeout(t._timer);
 
     t._timer = setTimeout(() => {
-      if (tok !== t._tok) return; // stale cleanup => ignore
-      t.rS({ section }, '', `${t.o}/${section || ''}`);
+      if (tok !== t._tok) return; // stale timeout
+      t._clean(section);
       t._driving = 0;
       t._timer = 0;
     }, t.SETTLE_MS);
   }
 
   drive(section, push) {
-    const t = this, l = t.l;
+    const t = this;
     t._driving = 1;
-
-    const hh = section ? `#${section.replaceAll('/', '--')}` : '#';
-    push ? (l.hash = hh) : l.replace(hh);
-
+    t._driveHash(section, push);
     t._scheduleClean(section);
   }
 
@@ -52,16 +73,15 @@ class HybridRouter {
     if ((!l.hash || l.hash === '#') && l.pathname !== '/') {
       t.drive(t.sectionFromPath(l.pathname), 0);
     } else {
-      // Not "driving" Carrd here; just normalize URL after Carrd settles
       t._scheduleClean(t.sectionFromHash(l.hash));
     }
 
-    // Click (still capture-phase)
+    // Click (capture)
     t.aEL('click', (e) => {
       const a = e.target?.closest?.('a[href^="#"]');
       if (!a) return;
 
-      // (Optional but recommended) don't break new-tab / modifier clicks
+      // keep normal browser behaviors
       if (e.defaultPrevented || e.button === 1 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
 
       e.preventDefault();
