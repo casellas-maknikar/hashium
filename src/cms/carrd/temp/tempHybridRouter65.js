@@ -8,7 +8,7 @@ class HybridRouter {
     t.SETTLE_MS = 450;
     t._driving = 0;
 
-    // detected root section id (first Carrd section)
+    // NEW: detected root section id (first Carrd section)
     t._rootId = '';
 
     (d.readyState === 'loading'
@@ -20,7 +20,7 @@ class HybridRouter {
   sectionFromHash(h) { return String(h || '').slice(1).replaceAll('--', '/'); }
   sectionFromPath(p) { return decodeURIComponent(String(p || '').replace(/^\/+/, '')); }
 
-  // detect first Carrd section id
+  // NEW: detect first Carrd section id
   detectRootId() {
     const s =
       document.querySelector('#main section[id]') ||
@@ -29,41 +29,26 @@ class HybridRouter {
     return (s && s.id) ? s.id : 'home';
   }
 
-  // map canonical section -> Carrd-driving hash
+  // NEW: map canonical section -> Carrd-driving hash
   // Canonical root is '' (clean URL "/"), but Carrd needs a real id to switch sections.
   hashFor(section) {
     if (!section) return `#${this._rootId}`;
     return `#${section.replaceAll('/', '--')}`;
   }
 
-  // FEATURE: detect Carrd scrollpoints (secondary fragments)
-  // Carrd scrollpoints are elements with data-scroll-id="test"
+  // FEATURE #1 helper: detect Carrd scrollpoints by data-scroll-id
   isScrollPoint(hash) {
     const raw = String(hash || '');
     if (!raw || raw === '#') return false;
-
     const id = this.sectionFromHash(raw); // '#test' -> 'test'
-    // NOTE: data-scroll-id values like "test" are simple; querySelector is safe here.
     return !!document.querySelector(`[data-scroll-id="${id}"]`);
-  }
-
-  // FEATURE: determine current active section canonically ('' for home)
-  activeSectionCanonical() {
-    const sec =
-      document.querySelector('#main section.active[id]') ||
-      document.querySelector('main section.active[id]') ||
-      document.querySelector('section.active[id]');
-
-    let id = (sec && sec.id) ? sec.id : (this._rootId || 'home');
-    id = String(id).replace(/-section$/, ''); // 'page-section' -> 'page'
-    if (id === 'home') return '';
-    return id.replaceAll('--', '/');
   }
 
   drive(section, push) {
     const t = this, l = t.l, ms = t.SETTLE_MS;
     t._driving = 1;
 
+    // CHANGED: use hashFor() so '#' drives the real root section
     const hh = t.hashFor(section);
     push ? (l.hash = hh) : l.replace(hh);
 
@@ -76,6 +61,7 @@ class HybridRouter {
   init() {
     const t = this, l = t.l, o = t.o, rS = t.rS, ms = t.SETTLE_MS;
 
+    // NEW: learn root section id once
     t._rootId = t.detectRootId();
 
     const clean = (section) => rS({ section }, '', `${o}/${section || ''}`);
@@ -90,35 +76,41 @@ class HybridRouter {
       if (l.hash === '#') t.drive('', 0);
     }
 
-    // Click (UNCHANGED from your original)
+    // Click
     t.aEL('click', (e) => {
       const a = e.target?.closest?.('a[href^="#"]');
       if (!a) return;
-      e.preventDefault();
 
       const href = a.getAttribute('href') || '#';
-      const s = (href === '#' || href === '') ? '' : t.sectionFromHash(href);
 
+      // ✅ FEATURE #2: If it's a scrollpoint, let Carrd handle the real hash '#test'
+      // (no preventDefault, no drive). Carrd will scroll only if it actually sees '#test'.
+      if (t.isScrollPoint(href)) return;
+
+      e.preventDefault();
+
+      // '#' means canonical root section ''
+      const s = (href === '#' || href === '') ? '' : t.sectionFromHash(href);
       t.drive(s, 1);
     }, 1);
 
-    // Hash cleanup (ONLY CHANGE: scrollpoint masking)
+    // Hash cleanup
     t.aEL('hashchange', () => {
       if (t._driving) return;
 
       if (l.hash === '#') return t.drive('', 0);
 
-      // ✅ ONE FEATURE: if hash is a scrollpoint, DO NOT treat it as a section.
-      // Let Carrd scroll using '#test', then mask the visible URL as '/page#test'.
+      // ✅ FEATURE #1 (already validated): if it's a scrollpoint,
+      // keep the REAL hash for Carrd, but mask the visible URL to /page#test
       if (t.isScrollPoint(l.hash)) {
+        // Let Carrd react to the hash first, then rewrite the visible URL.
         setTimeout(() => {
-          const section = t.activeSectionCanonical(); // '' or 'page' etc.
+          const section = t.sectionFromPath(l.pathname) || '';
           rS({ section }, '', `${o}/${section || ''}${l.hash}`);
         }, 0);
         return;
       }
 
-      // original behavior for section hashes
       settleClean(t.sectionFromHash(l.hash));
     });
 
