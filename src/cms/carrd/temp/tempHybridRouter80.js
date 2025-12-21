@@ -5,14 +5,20 @@ class HybridRouter {
     t.o = l.origin;
     t.h = h;
 
-    // Toggle to 1 if you want console logs
+    // Debug
     t.DEBUG = 0;
+    t.log = (...args) => { if (t.DEBUG) console.log('[HybridRouter]', ...args); };
 
-    // Keep originals (we will wrap history methods)
+    // Keep originals
     t._origReplaceState = h.replaceState.bind(h);
     t._origPushState = h.pushState.bind(h);
 
+    // Try to keep original location.replace (may be non-writable in some browsers)
+    t._origLocationReplace = null;
+    try { t._origLocationReplace = l.replace.bind(l); } catch {}
+
     t.rS = t._origReplaceState;
+
     t.aEL = w.addEventListener.bind(w);
     t.SETTLE_MS = 450;
     t._driving = 0;
@@ -20,26 +26,24 @@ class HybridRouter {
     t._rootId = '';
 
     // scrollpoint state
-    t._pendingScrollHash = '';     // '#test' we want Carrd to use
-    t._pendingScrollSection = '';  // 'page' (canonical) for masking
+    t._pendingScrollHash = '';
+    t._pendingScrollSection = '';
     t._reassertArmed = 0;
 
     // guard window
     t._lastScrollHash = '';
     t._lastScrollSection = '';
     t._lastScrollAt = 0;
-    t.SCROLL_GUARD_MS = 3500;
+    t.SCROLL_GUARD_MS = 5000;
 
-    // watchdog handle
-    t._watchdogTimer = 0;
+    // lightweight URL observer (debug only)
+    t._lastHrefSeen = l.href;
 
     (d.readyState === 'loading'
       ? d.addEventListener.bind(d, 'DOMContentLoaded')
       : (f) => f()
     )(() => t.init(), { once: 1 });
   }
-
-  log(...args) { if (this.DEBUG) console.log('[HybridRouter]', ...args); }
 
   sectionFromHash(h) { return String(h || '').slice(1).replaceAll('--', '/'); }
   sectionFromPath(p) { return decodeURIComponent(String(p || '').replace(/^\/+/, '')); }
@@ -57,7 +61,6 @@ class HybridRouter {
     return `#${section.replaceAll('/', '--')}`;
   }
 
-  // Carrd scrollpoints are elements with data-scroll-id="test"
   isScrollPointHash(hash) {
     const raw = String(hash || '');
     if (!raw || raw === '#') return false;
@@ -76,99 +79,83 @@ class HybridRouter {
     catch { return null; }
   }
 
-  // ✅ Watchdog: keep /page#test visible even if Carrd keeps clearing it post-scroll
-  startScrollpointWatchdog(section, hash) {
-    const t = this;
-    const start = Date.now();
-    const MAX_MS = 3000;       // watch for 3s after scroll
-    const TICK_MS = 80;        // check ~12x/sec
-    let stableTicks = 0;       // stop once it stays correct a bit
-
-    if (t._watchdogTimer) clearInterval(t._watchdogTimer);
-
-    t._watchdogTimer = setInterval(() => {
-      const elapsed = Date.now() - start;
-
-      // stop conditions
-      if (elapsed > MAX_MS) {
-        clearInterval(t._watchdogTimer);
-        t._watchdogTimer = 0;
-        t.log('watchdog stop: timeout');
-        return;
-      }
-
-      const want = `${t.o}/${section || ''}${hash}`;
-      const have = t.l.href;
-
-      // If URL already correct, count stability and stop after a few ticks
-      if (have === want) {
-        stableTicks++;
-        if (stableTicks >= 8) { // ~8 * 80ms = 640ms stable
-          clearInterval(t._watchdogTimer);
-          t._watchdogTimer = 0;
-          t.log('watchdog stop: stable');
-        }
-        return;
-      }
-
-      stableTicks = 0;
-
-      // If hash got cleared or changed away, restore visible URL (no re-scroll)
-      // We *do not* touch location.hash here.
-      t._origReplaceState({ section }, '', want);
-      t.log('watchdog restore ->', want);
-    }, TICK_MS);
+  _inScrollGuard() {
+    return (
+      this._lastScrollHash &&
+      (Date.now() - this._lastScrollAt) <= this.SCROLL_GUARD_MS
+    );
   }
 
-  patchHistoryForScrollpoints() {
+  _fixUrlToKeepScrollHash(urlLike) {
+    const t = this;
+    const raw = String(urlLike ?? '');
+
+    // If Carrd passes just '#' or '' (hash-only URL), preserve current path + last scroll hash
+    if (raw.trim() === '' || raw.trim().startsWith('#')) {
+      const path = (t._lastScrollSection ? `/${t._lastScrollSection}` : t.l.pathname) || '/';
+      return `${t.o}${path}${t._lastScrollHash}`;
+    }
+
+    const u = t._toUrl(raw);
+    if (!u) return urlLike;
+
+    // Treat '' and '#' as cleared
+    if (u.hash === '' || u.hash === '#') {
+      const pathSection = t.sectionFromPath(u.pathname) || '';
+      const shouldPreserve =
+        pathSection === (t._lastScrollSection || '') ||
+        u.pathname === t.l.pathname;
+
+      if (shouldPreserve) {
+        u.hash = t._lastScrollHash;
+        return u.toString();
+      }
+    }
+
+    return urlLike;
+  }
+
+  patchCarrdClearers() {
     const t = this;
     const h = t.h;
 
-    const wrap = (origFn) => function (state, title, url) {
-      // If no URL passed, forward.
-      if (typeof url !== 'string' && !(url instanceof String)) {
-        return origFn(state, title, url);
-      }
+    // Wrap replaceState / pushState
+    const wrapHistory = (name, origFn) => function (state, title, url) {
+      if (t.DEBUG) t.log(`${name} called with url=`, url);
 
-      const now = Date.now();
-      const inGuard =
-        t._lastScrollHash &&
-        (now - t._lastScrollAt) <= t.SCROLL_GUARD_MS;
-
-      if (!inGuard) return origFn(state, title, url);
-
-      const rawUrl = String(url).trim();
-
-      // If Carrd writes hash-only URLs (like '#'), preserve path + last scroll hash
-      if (rawUrl === '' || rawUrl.startsWith('#')) {
-        const path = (t._lastScrollSection ? `/${t._lastScrollSection}` : t.l.pathname) || '/';
-        const fixed = `${t.o}${path}${t._lastScrollHash}`;
-        t.log('history wrapper: hash-only ->', rawUrl, 'fixed ->', fixed);
-        return origFn(state, title, fixed);
-      }
-
-      const u = t._toUrl(url);
-      if (!u) return origFn(state, title, url);
-
-      const hashCleared = (u.hash === '' || u.hash === '#');
-      if (hashCleared) {
-        const pathSection = t.sectionFromPath(u.pathname) || '';
-        const shouldPreserve =
-          pathSection === (t._lastScrollSection || '') ||
-          u.pathname === t.l.pathname;
-
-        if (shouldPreserve) {
-          u.hash = t._lastScrollHash;
-          url = u.toString();
-          t.log('history wrapper: cleared-hash -> restored ->', url);
-        }
+      if (t._inScrollGuard() && (typeof url === 'string' || url instanceof String)) {
+        const fixed = t._fixUrlToKeepScrollHash(url);
+        if (fixed !== url) t.log(`${name} FIXED url ->`, fixed);
+        url = fixed;
       }
 
       return origFn(state, title, url);
     };
 
-    h.replaceState = wrap(t._origReplaceState);
-    h.pushState = wrap(t._origPushState);
+    h.replaceState = wrapHistory('replaceState', t._origReplaceState);
+    h.pushState = wrapHistory('pushState', t._origPushState);
+
+    // Try to wrap location.replace too (this is often what wins last)
+    try {
+      const loc = t.l;
+      const orig = t._origLocationReplace || loc.replace.bind(loc);
+
+      loc.replace = function (url) {
+        if (t.DEBUG) t.log('location.replace called with url=', url);
+
+        if (t._inScrollGuard() && (typeof url === 'string' || url instanceof String)) {
+          const fixed = t._fixUrlToKeepScrollHash(url);
+          if (fixed !== url) t.log('location.replace FIXED url ->', fixed);
+          url = fixed;
+        }
+
+        return orig(url);
+      };
+
+      t.log('location.replace wrapped');
+    } catch (e) {
+      t.log('location.replace NOT wrappable in this environment:', e?.message || e);
+    }
   }
 
   maskUrl(section, hash) {
@@ -192,13 +179,24 @@ class HybridRouter {
     const t = this, l = t.l, o = t.o, ms = t.SETTLE_MS;
 
     t._rootId = t.detectRootId();
-    t.patchHistoryForScrollpoints();
+
+    // Install wrappers (history + location.replace)
+    t.patchCarrdClearers();
+
+    // Debug URL observer (helps catch “silent” URL changes)
+    setInterval(() => {
+      if (!t.DEBUG) return;
+      if (l.href !== t._lastHrefSeen) {
+        t.log('URL CHANGED:', t._lastHrefSeen, '=>', l.href);
+        t._lastHrefSeen = l.href;
+      }
+    }, 50);
 
     const settleClean = (section) => setTimeout(() => {
       t._origReplaceState({ section }, '', `${o}/${section || ''}`);
     }, ms);
 
-    // Initial entry (original)
+    // Initial entry
     if ((!l.hash || l.hash === '#') && l.pathname !== '/') {
       t.drive(t.sectionFromPath(l.pathname), 0);
     } else {
@@ -207,7 +205,7 @@ class HybridRouter {
       if (l.hash === '#') t.drive('', 0);
     }
 
-    // Click (cooperative)
+    // Click
     t.aEL('click', (e) => {
       const a = e.target?.closest?.('a[href^="#"]');
       if (!a) return;
@@ -228,14 +226,14 @@ class HybridRouter {
             return;
           }
           t._reassertArmed = 0;
-          l.hash = t._pendingScrollHash; // let Carrd scroll natively
+          l.hash = t._pendingScrollHash;
           t.log('reassert hash ->', t._pendingScrollHash);
         }, 0);
 
         return;
       }
 
-      // Section navigation (original)
+      // Section navigation
       e.preventDefault();
       const s = (href === '#' || href === '') ? '' : t.sectionFromHash(href);
       t.drive(s, 1);
@@ -247,31 +245,26 @@ class HybridRouter {
 
       if (l.hash === '#') return t.drive('', 0);
 
-      // Scrollpoint hash: Carrd scrolls natively
       if (t.isScrollPointHash(l.hash)) {
         const section = t._pendingScrollSection || t.currentSectionCanonical();
         const hash = l.hash;
 
+        // Arm guard
         t._lastScrollHash = hash;
         t._lastScrollSection = section;
         t._lastScrollAt = Date.now();
+        t.log('scrollpoint detected; guard armed:', { section, hash });
 
-        // Mask immediately to /page#test
-        setTimeout(() => {
-          t.maskUrl(section, hash);
-        }, 0);
-
-        // ✅ Start watchdog to defeat later Carrd URL cleanup
-        t.startScrollpointWatchdog(section, hash);
+        // Mask immediately
+        setTimeout(() => t.maskUrl(section, hash), 0);
 
         return;
       }
 
-      // Normal section hash => clean URL
       settleClean(t.sectionFromHash(l.hash));
     });
 
-    // Back / Forward (original)
+    // Back / Forward
     t.aEL('popstate', (e) => {
       if (t._driving) return;
       t.drive(
