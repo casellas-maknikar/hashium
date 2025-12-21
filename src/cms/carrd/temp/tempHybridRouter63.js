@@ -96,14 +96,27 @@ class HybridRouter {
 
     // Initial entry
     if ((!l.hash || l.hash === '#') && l.pathname !== '/') {
+      // No fragment (or just '#') but we have a path: treat path as section.
       t.drive(t.sectionFromPath(l.pathname), 0);
+    } else if (l.hash && l.hash !== '#') {
+      // A fragment is present. Check if it's a scrollpoint.
+      if (t.isScrollPoint(l.hash)) {
+        const currentSection = t.sectionFromPath(l.pathname) || '';
+        // Preserve the scrollpoint fragment and set the history state to the
+        // current section. Do not drive to the fragment as a section. Using
+        // replaceState here avoids adding a new entry on initial load.
+        rS({ section: currentSection }, '', `${o}/${currentSection}${l.hash}`);
+      } else {
+        // Not a scrollpoint: treat hash as representing a section. Clean
+        // it after a delay and, if it's exactly '#', drive to root.
+        const s = t.sectionFromHash(l.hash);
+        settleClean(s);
+        if (l.hash === '#') t.drive('', 0);
+      }
     } else {
-      // NEW: treat "/#" as root (empty canonical section)
-      const s = l.hash === '#' ? '' : t.sectionFromHash(l.hash);
-      settleClean(s);
-
-      // NEW: if hash is exactly '#', force Carrd to the real root section without new history
-      if (l.hash === '#') t.drive('', 0);
+      // l.hash is empty (initial load to root with no fragment)
+      // If pathname is root, no action needed. If pathname is non-root,
+      // this falls through to the first branch above.
     }
 
     // Click
