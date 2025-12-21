@@ -74,7 +74,6 @@ class HybridRouter {
   }
 
   isInvisibleScrollPoint(el) {
-    // confirmed attribute form
     return String(el?.getAttribute('data-scroll-invisible') || '') === '1';
   }
 
@@ -163,22 +162,20 @@ class HybridRouter {
   }
 
   // Write URL/state for scrollpoints
+  // Option B: invisible scrollpoints still store scrollId in state,
+  // but URL remains clean (/page).
   writeScrollUrl(section, hash, invisible, push) {
-    const scrollId = invisible ? '' : this.scrollIdFromHash(hash);
+    const scrollId = this.scrollIdFromHash(hash); // ALWAYS keep in state (Option B)
     const url = `${this.o}/${section || ''}${invisible ? '' : hash}`;
     const state = { section, scrollId };
     (push ? this.pS : this.rS)(state, '', url);
   }
 
-  // Should we push a new history entry for this scrollpoint?
-  // If the current history entry already represents the same (section, scrollId),
-  // don't push (avoid history spam).
+  // Avoid history spam: don't push if same target (section, scrollId)
   shouldPushScroll(section, scrollId) {
     const cs = history.state || {};
     const curSection = typeof cs.section === 'string' ? cs.section : this.sectionFromPath(this.l.pathname) || '';
     const curScrollId = typeof cs.scrollId === 'string' ? cs.scrollId : '';
-
-    // Same target => no push
     return !(curSection === section && curScrollId === scrollId);
   }
 
@@ -201,7 +198,7 @@ class HybridRouter {
     t._rootId = t.detectRootId();
 
     // -----------------------------
-    // Scrollpoint interception: pushes only when target changes
+    // Scrollpoint interception: pushes only when target changes (including invisible)
     // -----------------------------
     const interceptScrollpoint = (e) => {
       const a = e.target?.closest?.('a[href^="#"]');
@@ -220,15 +217,13 @@ class HybridRouter {
 
       const section = t.currentSectionCanonical();
       const invisible = t.isInvisibleScrollPoint(el);
-      const scrollId = invisible ? '' : t.scrollIdFromHash(href);
+      const scrollId = t.scrollIdFromHash(href);
 
-      // ✅ NEW FEATURE: avoid history spam
       const push = t.shouldPushScroll(section, scrollId);
 
-      // Always ensure URL/state is correct; push only when target changed
+      // Always keep state correct; push only when target changes
       t.writeScrollUrl(section, href, invisible, push);
 
-      // Always scroll (even if same target, user likely expects a re-scroll)
       t.scrollToEl(el);
     };
 
@@ -254,7 +249,6 @@ class HybridRouter {
       const section = t.sectionFromPath(l.pathname) || '';
       const invisible = t.isInvisibleScrollPoint(initialEl);
 
-      // Ensure section is visible
       t.drive(section, 0);
 
       setTimeout(() => {
@@ -278,9 +272,7 @@ class HybridRouter {
       if (l.hash === '#') t.drive('', 0);
     }
 
-    // -----------------------------
     // Normal section click routing (original)
-    // -----------------------------
     t.aEL('click', (e) => {
       if (Date.now() <= t._suppressClickUntil) return;
 
@@ -293,9 +285,7 @@ class HybridRouter {
       t.drive(s, 1);
     }, 1);
 
-    // -----------------------------
     // Hashchange: ignore scrollpoints (we own them)
-    // -----------------------------
     t.aEL('hashchange', () => {
       if (t._driving) return;
 
@@ -313,9 +303,7 @@ class HybridRouter {
       settleClean(t.sectionFromHash(l.hash));
     });
 
-    // -----------------------------
-    // Back / Forward: restore scrollpoint position from history state
-    // -----------------------------
+    // Back / Forward: restore scrollpoint position from history state (including invisible)
     t.aEL('popstate', (e) => {
       if (t._driving) return;
 
@@ -327,7 +315,6 @@ class HybridRouter {
       const scrollId = typeof e.state?.scrollId === 'string' ? e.state.scrollId : '';
       const hash = scrollId ? `#${scrollId}` : '';
 
-      // Drive section
       t.drive(section, 0);
 
       if (scrollId) {
@@ -335,12 +322,13 @@ class HybridRouter {
           const el = t.getScrollElFromHash(hash);
           if (el) t.scrollToEl(el);
 
-          // Ensure URL matches this history entry (REPLACE)
+          // Restore URL for this history entry:
+          // - invisible => /page
+          // - visible => /page#id
           const invisible = el ? t.isInvisibleScrollPoint(el) : false;
           t.writeScrollUrl(section, hash, invisible, false);
         }, ms + 30);
       } else {
-        // No scrollId: ensure URL is clean for this state (REPLACE)
         t.rS({ section }, '', `${t.o}/${section || ''}`);
       }
     });
