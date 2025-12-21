@@ -9,7 +9,6 @@ class HybridRouter {
 
     this.SETTLE_MS = 450;
     this._driving = false;
-    this._scroll = null;
 
     const init = () => this.init();
     w.document.readyState === 'loading'
@@ -19,36 +18,28 @@ class HybridRouter {
 
   path = s => String(s || '').replaceAll('--', '/');
   unpath = s => String(s || '').replaceAll('/', '--');
-
-  sectionFromHash(h) {
-    const v = String(h || '').slice(1);
-    return v.includes('--') || v === '' ? this.path(v) : null;
-  }
-
+  sectionFromHash = h => this.path(String(h || '').slice(1));
   sectionFromPathname = p =>
     decodeURIComponent(String(p || '').replace(/^\/+/, ''));
-
   hashFor = s => (s ? `#${this.unpath(s)}` : '#');
+  settle = fn => setTimeout(fn, this.SETTLE_MS);
+
+  findScrollId(id) {
+    return document.querySelector(`[data-scroll-id="${id}"]`);
+  }
 
   cleanUrl(section, scroll) {
     return `${this.o}/${section || ''}${scroll ? `#${scroll}` : ''}`;
   }
 
-  settle = fn => setTimeout(fn, this.SETTLE_MS);
-
-  cleanTo(section) {
-    this.rS(
-      { section },
-      '',
-      this.cleanUrl(section, this._scroll)
-    );
+  cleanTo(section, scroll) {
+    this.rS({ section }, '', this.cleanUrl(section, scroll));
   }
 
   drive(section, push) {
     this._driving = true;
-    this._scroll = null;
-
     const target = this.hashFor(section);
+
     push ? (this.l.hash = target) : this.l.replace(target);
 
     this.settle(() => {
@@ -63,63 +54,52 @@ class HybridRouter {
       this.drive(this.sectionFromPathname(this.l.pathname), false);
     } else {
       const s = this.sectionFromHash(this.l.hash);
-      if (s !== null) this.settle(() => this.cleanTo(s));
+      this.settle(() => this.cleanTo(s));
     }
 
-    // Click interception
+    // Click interception (sections only)
     this.aEL(
       'click',
       e => {
         const a = e.target?.closest?.('a[href^="#"]');
         if (!a) return;
-
-        const h = a.getAttribute('href').slice(1);
-        const s = this.sectionFromHash('#' + h);
-
-        if (s !== null) {
-          e.preventDefault();
-          this.drive(s, true);
-        }
+        e.preventDefault();
+        this.drive(this.sectionFromHash(a.getAttribute('href')), true);
       },
       true
     );
 
-    // Hash change
+    // Hash change (Carrd first, router mirrors state)
     this.aEL('hashchange', () => {
       if (this._driving) return;
 
       const raw = this.l.hash.slice(1);
-      const s = this.sectionFromHash('#' + raw);
 
-      if (s !== null) {
-        this._scroll = null;
-        this.settle(() => this.cleanTo(s));
-      } else {
-        // secondary fragment (scrollpoint)
-        this._scroll = raw;
-        this.settle(() => {
-          this.rS(
-            history.state,
-            '',
-            this.cleanUrl(
-              history.state?.section || this.sectionFromPathname(this.l.pathname),
-              this._scroll
-            )
-          );
-        });
+      // Scrollpoint? Do NOT drive.
+      if (this.findScrollId(raw)) {
+        const section =
+          history.state?.section ||
+          this.sectionFromPathname(this.l.pathname);
+
+        this.settle(() => this.cleanTo(section, raw));
+        return;
       }
+
+      // Normal section change
+      const s = this.sectionFromHash(this.l.hash);
+      this.settle(() => this.cleanTo(s));
     });
 
     // Back / Forward
     this.aEL('popstate', e => {
       if (this._driving) return;
 
-      const section =
+      const s =
         typeof e.state?.section === 'string'
           ? e.state.section
           : this.sectionFromPathname(this.l.pathname);
 
-      this.drive(section, false);
+      this.drive(s, false);
     });
   }
 }
