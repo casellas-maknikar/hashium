@@ -9,35 +9,30 @@ class HybridRouter {
     t.DEBUG = 0;
     t.log = (...args) => { if (t.DEBUG) console.log('[HybridRouter]', ...args); };
 
-    // Keep originals
+    // Originals
     t._origReplaceState = h.replaceState.bind(h);
     t._origPushState = h.pushState.bind(h);
-
-    // Try to keep original location.replace (may be non-writable in some browsers)
-    t._origLocationReplace = null;
-    try { t._origLocationReplace = l.replace.bind(l); } catch {}
-
-    t.rS = t._origReplaceState;
 
     t.aEL = w.addEventListener.bind(w);
     t.SETTLE_MS = 450;
     t._driving = 0;
 
+    // Carrd root section id (first section)
     t._rootId = '';
 
-    // scrollpoint state
+    // Scrollpoint intent (cooperative)
     t._pendingScrollHash = '';
     t._pendingScrollSection = '';
     t._reassertArmed = 0;
 
-    // guard window
+    // Guard window
     t._lastScrollHash = '';
     t._lastScrollSection = '';
     t._lastScrollAt = 0;
-    t.SCROLL_GUARD_MS = 5000;
+    t.SCROLL_GUARD_MS = 8000;
 
-    // lightweight URL observer (debug only)
-    t._lastHrefSeen = l.href;
+    // Watchdog
+    t._watchdogTimer = 0;
 
     (d.readyState === 'loading'
       ? d.addEventListener.bind(d, 'DOMContentLoaded')
@@ -71,12 +66,8 @@ class HybridRouter {
   currentSectionCanonical() {
     const s = history.state?.section;
     if (typeof s === 'string') return s;
+    // fallback: pathname (your clean URL)
     return this.sectionFromPath(this.l.pathname) || '';
-  }
-
-  _toUrl(urlLike) {
-    try { return new URL(String(urlLike), this.o + '/'); }
-    catch { return null; }
   }
 
   _inScrollGuard() {
@@ -86,80 +77,67 @@ class HybridRouter {
     );
   }
 
-  _fixUrlToKeepScrollHash(urlLike) {
-    const t = this;
-    const raw = String(urlLike ?? '');
-
-    // If Carrd passes just '#' or '' (hash-only URL), preserve current path + last scroll hash
-    if (raw.trim() === '' || raw.trim().startsWith('#')) {
-      const path = (t._lastScrollSection ? `/${t._lastScrollSection}` : t.l.pathname) || '/';
-      return `${t.o}${path}${t._lastScrollHash}`;
-    }
-
-    const u = t._toUrl(raw);
-    if (!u) return urlLike;
-
-    // Treat '' and '#' as cleared
-    if (u.hash === '' || u.hash === '#') {
-      const pathSection = t.sectionFromPath(u.pathname) || '';
-      const shouldPreserve =
-        pathSection === (t._lastScrollSection || '') ||
-        u.pathname === t.l.pathname;
-
-      if (shouldPreserve) {
-        u.hash = t._lastScrollHash;
-        return u.toString();
-      }
-    }
-
-    return urlLike;
+  // Build the canonical masked URL you want visible: /page#test
+  buildMaskedUrl(section, hash) {
+    // note: section '' => root '/'
+    return `${this.o}/${section || ''}${hash || ''}`;
   }
 
-  patchCarrdClearers() {
+  // Set visible URL WITHOUT re-triggering Carrd scroll logic
+  // (replaceState won’t fire hashchange)
+  restoreMaskedUrl(section, hash) {
+    const url = this.buildMaskedUrl(section, hash);
+    this._origReplaceState({ section }, '', url);
+    this.log('restoreMaskedUrl ->', url);
+  }
+
+  // ✅ NEW: robust watchdog that outlasts Carrd’s “late clear”
+  startScrollpointWatchdog(section, hash) {
     const t = this;
-    const h = t.h;
+    const start = Date.now();
 
-    // Wrap replaceState / pushState
-    const wrapHistory = (name, origFn) => function (state, title, url) {
-      if (t.DEBUG) t.log(`${name} called with url=`, url);
+    const MIN_RUN_MS = 2000;  // must run at least this long
+    const MAX_RUN_MS = 6000;  // stop after this long no matter what
+    const TICK_MS = 60;
 
-      if (t._inScrollGuard() && (typeof url === 'string' || url instanceof String)) {
-        const fixed = t._fixUrlToKeepScrollHash(url);
-        if (fixed !== url) t.log(`${name} FIXED url ->`, fixed);
-        url = fixed;
+    let stableTicks = 0;
+
+    if (t._watchdogTimer) clearInterval(t._watchdogTimer);
+
+    t._watchdogTimer = setInterval(() => {
+      const elapsed = Date.now() - start;
+
+      if (elapsed > MAX_RUN_MS) {
+        clearInterval(t._watchdogTimer);
+        t._watchdogTimer = 0;
+        t.log('watchdog stop: timeout');
+        return;
       }
 
-      return origFn(state, title, url);
-    };
+      const wantHash = String(hash || '');
+      const haveHash = String(t.l.hash || '');
 
-    h.replaceState = wrapHistory('replaceState', t._origReplaceState);
-    h.pushState = wrapHistory('pushState', t._origPushState);
+      // If Carrd cleared it (haveHash '' or '#'), restore.
+      if (haveHash !== wantHash) {
+        stableTicks = 0;
 
-    // Try to wrap location.replace too (this is often what wins last)
-    try {
-      const loc = t.l;
-      const orig = t._origLocationReplace || loc.replace.bind(loc);
-
-      loc.replace = function (url) {
-        if (t.DEBUG) t.log('location.replace called with url=', url);
-
-        if (t._inScrollGuard() && (typeof url === 'string' || url instanceof String)) {
-          const fixed = t._fixUrlToKeepScrollHash(url);
-          if (fixed !== url) t.log('location.replace FIXED url ->', fixed);
-          url = fixed;
+        // Only restore during the scroll guard window (avoid messing with unrelated nav)
+        if (t._inScrollGuard()) {
+          t.restoreMaskedUrl(section, hash);
         }
+        return;
+      }
 
-        return orig(url);
-      };
+      // Hash matches (currently good)
+      stableTicks++;
 
-      t.log('location.replace wrapped');
-    } catch (e) {
-      t.log('location.replace NOT wrappable in this environment:', e?.message || e);
-    }
-  }
-
-  maskUrl(section, hash) {
-    this._origReplaceState({ section }, '', `${this.o}/${section || ''}${hash || ''}`);
+      // Only allow stopping after minimum run time AND stable for ~600ms
+      if (elapsed >= MIN_RUN_MS && stableTicks >= Math.ceil(600 / TICK_MS)) {
+        clearInterval(t._watchdogTimer);
+        t._watchdogTimer = 0;
+        t.log('watchdog stop: stable');
+      }
+    }, TICK_MS);
   }
 
   drive(section, push) {
@@ -180,23 +158,11 @@ class HybridRouter {
 
     t._rootId = t.detectRootId();
 
-    // Install wrappers (history + location.replace)
-    t.patchCarrdClearers();
-
-    // Debug URL observer (helps catch “silent” URL changes)
-    setInterval(() => {
-      if (!t.DEBUG) return;
-      if (l.href !== t._lastHrefSeen) {
-        t.log('URL CHANGED:', t._lastHrefSeen, '=>', l.href);
-        t._lastHrefSeen = l.href;
-      }
-    }, 50);
-
     const settleClean = (section) => setTimeout(() => {
       t._origReplaceState({ section }, '', `${o}/${section || ''}`);
     }, ms);
 
-    // Initial entry
+    // Initial entry (original behavior)
     if ((!l.hash || l.hash === '#') && l.pathname !== '/') {
       t.drive(t.sectionFromPath(l.pathname), 0);
     } else {
@@ -205,7 +171,7 @@ class HybridRouter {
       if (l.hash === '#') t.drive('', 0);
     }
 
-    // Click
+    // Click (cooperative)
     t.aEL('click', (e) => {
       const a = e.target?.closest?.('a[href^="#"]');
       if (!a) return;
@@ -213,12 +179,13 @@ class HybridRouter {
       const href = a.getAttribute('href') || '#';
       if (!href || href === '#') return;
 
-      // Scrollpoint intent
+      // Scrollpoint intent: DO NOT preventDefault; let Carrd do its scroll.
       if (t.isScrollPointHash(href)) {
         t._pendingScrollHash = href;
         t._pendingScrollSection = t.currentSectionCanonical();
         t._reassertArmed = 1;
 
+        // After Carrd processes the click, if it turned it into '#page', reassert '#test' once.
         setTimeout(() => {
           if (!t._reassertArmed) return;
           if (l.hash === t._pendingScrollHash) {
@@ -233,7 +200,7 @@ class HybridRouter {
         return;
       }
 
-      // Section navigation
+      // Section navigation (your normal router behavior)
       e.preventDefault();
       const s = (href === '#' || href === '') ? '' : t.sectionFromHash(href);
       t.drive(s, 1);
@@ -243,24 +210,32 @@ class HybridRouter {
     t.aEL('hashchange', () => {
       if (t._driving) return;
 
+      // Keep original root handling
       if (l.hash === '#') return t.drive('', 0);
 
+      // Scrollpoint hash: Carrd will scroll natively (with its animation variants)
       if (t.isScrollPointHash(l.hash)) {
         const section = t._pendingScrollSection || t.currentSectionCanonical();
         const hash = l.hash;
 
-        // Arm guard
+        // Arm guard + record
         t._lastScrollHash = hash;
         t._lastScrollSection = section;
         t._lastScrollAt = Date.now();
         t.log('scrollpoint detected; guard armed:', { section, hash });
 
-        // Mask immediately
-        setTimeout(() => t.maskUrl(section, hash), 0);
+        // Mask immediately (so you see /page#test quickly)
+        setTimeout(() => {
+          t.restoreMaskedUrl(section, hash);
+        }, 0);
+
+        // ✅ Watchdog keeps it from disappearing later
+        t.startScrollpointWatchdog(section, hash);
 
         return;
       }
 
+      // Normal section hash => clean URL
       settleClean(t.sectionFromHash(l.hash));
     });
 
