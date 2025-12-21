@@ -43,6 +43,28 @@ class HybridRouter {
     return `#${section.replaceAll('/', '--')}`;
   }
 
+  /**
+   * Determine if a given href/hash refers to a scrollpoint (has a matching
+   * element with a data-scroll-id attribute). Accepts either a full hash
+   * (starting with '#') or the decoded section string.
+   *
+   * @param {string} href The href or hash to examine (e.g. '#test').
+   */
+  isScrollPoint(href) {
+    if (!href || href === '#') return false;
+    let id;
+    if (href.startsWith('#')) {
+      id = href.slice(1);
+    } else {
+      id = href;
+    }
+    // Normalize '--' sequences back into '/'; scrollpoint IDs are simple
+    // strings so this usually does nothing, but if someone uses '--' in
+    // a scrollpoint name this will still match the data attribute.
+    id = id.replaceAll('--', '/');
+    return !!document.querySelector(`[data-scroll-id="${id}"]`);
+  }
+
   drive(section, push) {
     const t = this,
       l = t.l,
@@ -96,15 +118,9 @@ class HybridRouter {
         const section = href === '#' || href === '' ? '' : t.sectionFromHash(href);
 
         // FEATURE: skip driving for scrollpoint anchors
-        // If an element with a matching data-scroll-id exists, allow the default behaviour
-        // (do not preventDefault or call drive). This will keep the fragment and let
-        // Carrd scroll to the scrollpoint.
-        if (href && href !== '#') {
-          const scrollId = section; // sectionFromHash removes the '#'
-          if (document.querySelector(`[data-scroll-id="${scrollId}"]`)) {
-            // Let default anchor behaviour occur
-            return;
-          }
+        if (t.isScrollPoint(href)) {
+          // Let default anchor behaviour occur; scrollpoint hash remains in URL
+          return;
         }
 
         e.preventDefault();
@@ -117,9 +133,23 @@ class HybridRouter {
     t.aEL('hashchange', () => {
       if (t._driving) return;
 
-      // NEW: '#' means canonical root; drive Carrd to actual root id (no new history)
+      // '#' means canonical root; drive Carrd to actual root id (no new history)
       if (l.hash === '#') return t.drive('', 0);
 
+      // If the hash refers to a scrollpoint, do not clean it. Instead,
+      // update the history state to reflect the current section and
+      // preserve the fragment. This prevents '/page#test' from being
+      // rewritten to '/test'.
+      if (t.isScrollPoint(l.hash)) {
+        const currentSection = t.sectionFromPath(l.pathname);
+        // Replace state so that back/forward works with section; include
+        // the fragment in the URL. Do not push a new entry; this mirrors
+        // native hashchange behaviour.
+        rS({ section: currentSection }, '', `${o}/${currentSection}${l.hash}`);
+        return;
+      }
+
+      // Otherwise, treat the hash as referring to a section and clean it.
       settleClean(t.sectionFromHash(l.hash));
     });
 
