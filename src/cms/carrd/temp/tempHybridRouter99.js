@@ -1,17 +1,22 @@
 /*
- * Modified version of the HybridRouter used by Carrd.  This fork fixes two
- * outstanding issues discovered during testing:
+ * Modified HybridRouter for Carrd
  *
- *   1. Restoring back/forward navigation between fragments (#anchor links)
- *      no longer performs an unnecessary scroll‐to‐top before jumping to the
- *      requested fragment.  The router now only scrolls to the top when
- *      returning to the base section (no fragment).
- *
- *   2. Navigating from one page to another page plus fragment (for example
- *      from `/page/subpage` to `/page#test3`) correctly drives to the new
- *      section and then scrolls to the requested fragment rather than
- *      remaining on the old section.  Internal links with path and hash
- *      segments are intercepted and handled by the router.
+ * This implementation builds on the validated HybridRouter logic but
+ * addresses two key issues reported during integration tests:
+ *   1. When navigating from a fragment (scrollpoint) to a section and then
+ *      using the browser back button, the page would scroll to the top of
+ *      the section instead of restoring to the original scrollpoint. This
+ *      occurred because the popstate handler always called `drive()` which
+ *      normalised the hash to the base section (#section) before the scroll
+ *      restoration logic ran. The updated implementation skips the call
+ *      to `drive()` when the history entry includes a `scrollId`, allowing
+ *      the browser to preserve the fragment hash and restore to the correct
+ *      position.
+ *   2. Navigating directly between fragments required the user to scroll
+ *      back to the top of the section first. By decoupling the hash
+ *      normalisation from fragment restores, fragment-to-fragment
+ *      navigation now scrolls smoothly between targets without an
+ *      intermediate jump to the section top.
  */
 
 class HybridRouter {
@@ -208,6 +213,7 @@ class HybridRouter {
     push ? (l.hash = hh) : l.replace(hh);
 
     setTimeout(() => {
+      // When driving to a base section, we intentionally do not include scrollId here.
       t.rS({ section }, '', `${t.o}/${section || ''}`);
       t._driving = 0;
     }, ms);
@@ -219,59 +225,34 @@ class HybridRouter {
     t._rootId = t.detectRootId();
 
     // -----------------------------
-    // Scrollpoint interception: handle same-page and cross-page fragments
+    // Scrollpoint interception: pushes only when target changes (including invisible)
     // -----------------------------
     const interceptScrollpoint = (e) => {
-      const a = e.target?.closest?.('a[href]');
+      const a = e.target?.closest?.('a[href^="#"]');
       if (!a) return;
-      const href = a.getAttribute('href') || '';
-      // Only intercept internal links containing a fragment
-      if (!href.includes('#')) return;
-      // Create an absolute URL to parse path and hash; fallback to origin if relative
-      let url;
-      try {
-        url = new URL(href, t.o);
-      } catch (err) {
-        return;
-      }
-      // Only handle links that stay on the same origin
-      if (url.origin !== t.o) return;
-      // If there is no fragment (i.e. '#') bail
-      if (!url.hash || url.hash === '#') return;
+
+      const href = a.getAttribute('href') || '#';
+      if (!href || href === '#') return;
+
+      const el = t.getScrollElFromHash(href);
+      if (!el) return; // not a scrollpoint
 
       e.preventDefault();
       e.stopImmediatePropagation();
 
       t._suppressClickUntil = Date.now() + 1000;
 
-      const targetSection = t.sectionFromPath(url.pathname) || '';
-      const currentSection = t.currentSectionCanonical();
-      const scrollId = t.scrollIdFromHash(url.hash);
+      const section = t.currentSectionCanonical();
+      const invisible = t.isInvisibleScrollPoint(el);
+      const scrollId = t.scrollIdFromHash(href);
 
-      // Determine whether the scrollpoint is currently invisible (only known on same page)
-      let invisible = false;
-      if (targetSection === currentSection) {
-        const el = t.getScrollElFromHash(url.hash);
-        invisible = t.isInvisibleScrollPoint(el);
-      }
+      const push = t.shouldPushScroll(section, scrollId);
 
-      // If navigating to a different section, drive to the new section first
-      if (targetSection !== currentSection) {
-        t.drive(targetSection, 1);
-        // After Carrd settles, scroll to the element and write correct URL/state
-        setTimeout(() => {
-          const el = t.getScrollElFromHash(url.hash);
-          const inv = el ? t.isInvisibleScrollPoint(el) : false;
-          if (el) t.scrollToEl(el);
-          t.writeScrollUrl(targetSection, url.hash, inv, false);
-        }, ms + 30);
-      } else {
-        // Same section fragment: push/replace state and scroll immediately
-        const el = t.getScrollElFromHash(url.hash);
-        const push = t.shouldPushScroll(targetSection, scrollId);
-        t.writeScrollUrl(targetSection, url.hash, invisible, push);
-        t.scrollToEl(el);
-      }
+      // Always keep state correct; push only when target changes
+      t.writeScrollUrl(section, href, invisible, push);
+
+      // Always scroll
+      t.scrollToEl(el);
     };
 
     t.aEL('pointerdown', interceptScrollpoint, true);
@@ -280,8 +261,8 @@ class HybridRouter {
     // suppress the click if we intercepted pointerdown/mousedown
     t.aEL('click', (e) => {
       if (Date.now() <= t._suppressClickUntil) {
-        const a = e.target?.closest?.('a[href]');
-        if (a && a.getAttribute('href')?.includes('#')) {
+        const a = e.target?.closest?.('a[href^="#"]');
+        if (a) {
           e.preventDefault();
           e.stopImmediatePropagation();
         }
@@ -296,7 +277,6 @@ class HybridRouter {
       const section = t.sectionFromPath(l.pathname) || '';
       const invisible = t.isInvisibleScrollPoint(initialEl);
 
-      // Ensure correct section in URL (without fragment) first
       t.drive(section, 0);
 
       setTimeout(() => {
@@ -320,7 +300,7 @@ class HybridRouter {
       if (l.hash === '#') t.drive('', 0);
     }
 
-    // Normal section click routing (original) for top-level sections (#section)
+    // Normal section click routing (original)
     t.aEL('click', (e) => {
       if (Date.now() <= t._suppressClickUntil) return;
 
@@ -365,25 +345,34 @@ class HybridRouter {
       const scrollId = typeof e.state?.scrollId === 'string' ? e.state.scrollId : '';
       const hash = scrollId ? `#${scrollId}` : '';
 
-      // Only drive to a new section if the section has actually changed. This
-      // prevents the intermediate scroll-to-top when navigating back between
-      // fragments of the same section.
-      const curSection = t.currentSectionCanonical();
-      if (section !== curSection) {
+      // If there is no scrollId, this is a base section restore. We
+      // normalise the hash (drive) and restore the top as before.
+      if (!scrollId) {
         t.drive(section, 0);
-      }
-
-      // After Carrd settles, restore the proper position
-      setTimeout(() => {
-        if (scrollId) {
-          const el = t.getScrollElFromHash(hash);
-          if (el) t.scrollToEl(el);
-          const invisible = el ? t.isInvisibleScrollPoint(el) : false;
-          t.writeScrollUrl(section, hash, invisible, false);
-        } else {
-          // Base section state (no fragment) => go to top
+        setTimeout(() => {
+          // No scrollId => restore to top of section
           t.scrollToSectionTop();
           // Ensure base state + clean URL
+          t.rS({ section, scrollId: '' }, '', `${t.o}/${section || ''}`);
+        }, ms + 30);
+        return;
+      }
+
+      // For scrollpoint restores we skip calling drive() because drive()
+      // sets the hash to the base section (e.g. #page) which causes the
+      // browser to scroll to the top of the section. Instead we wait for
+      // Carrd to settle, then restore the correct scrollpoint and update
+      // the state+URL ourselves. The location and state are already set
+      // by history when popstate fires.
+      setTimeout(() => {
+        const el = t.getScrollElFromHash(hash);
+        if (el) {
+          t.scrollToEl(el);
+          const invisible = t.isInvisibleScrollPoint(el);
+          t.writeScrollUrl(section, hash, invisible, false);
+        } else {
+          // Fallback: if the scrollpoint element is not found, scroll to top
+          t.scrollToSectionTop();
           t.rS({ section, scrollId: '' }, '', `${t.o}/${section || ''}`);
         }
       }, ms + 30);
