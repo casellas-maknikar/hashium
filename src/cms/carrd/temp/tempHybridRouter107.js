@@ -13,10 +13,10 @@ class HybridRouter {
     t._lastSectionHashCleaned = '';
     t._lastSectionHashCleanedAt = 0;
 
-    const onReady = (d.readyState === 'loading')
+    (d.readyState === 'loading'
       ? (fn) => d.addEventListener('DOMContentLoaded', fn, { once: 1 })
-      : (fn) => fn();
-    onReady(() => t.init());
+      : (fn) => fn()
+    )(() => t.init());
   }
 
   sectionFromHash(h) { return String(h || '').slice(1).replaceAll('--', '/'); }
@@ -24,10 +24,10 @@ class HybridRouter {
 
   detectRootId() {
     const s = document.querySelector('#main section[id]') || document.querySelector('main section[id]') || document.querySelector('section[id]');
-    return (s && s.id) ? s.id : 'home';
+    return s?.id || 'home';
   }
 
-  hashFor(section) { return !section ? `#${this._rootId}` : `#${section.replaceAll('/', '--')}`; }
+  hashFor(section) { return section ? `#${section.replaceAll('/', '--')}` : `#${this._rootId}`; }
 
   currentSectionCanonical() {
     const s = history.state?.section;
@@ -39,26 +39,26 @@ class HybridRouter {
   getScrollElFromHash(hashOrId) {
     const raw = String(hashOrId || '');
     if (!raw || raw === '#') return null;
-    const id = raw.startsWith('#') ? raw.slice(1) : raw;
+    const id = raw[0] === '#' ? raw.slice(1) : raw;
     return document.querySelector(`[data-scroll-id="${id}"]`);
   }
 
   scrollIdFromHash(hashOrId) {
     const raw = String(hashOrId || '');
     if (!raw || raw === '#') return '';
-    return raw.startsWith('#') ? raw.slice(1) : raw;
+    return raw[0] === '#' ? raw.slice(1) : raw;
   }
 
   prevNextScrollPoints(el) {
-    const points = this.allScrollPoints(), i = points.indexOf(el);
-    return { prev: (i > 0) ? points[i - 1] : null, next: (i >= 0 && i < points.length - 1) ? points[i + 1] : null };
+    const pts = this.allScrollPoints(), i = pts.indexOf(el);
+    return { prev: i > 0 ? pts[i - 1] : null, next: (i >= 0 && i < pts.length - 1) ? pts[i + 1] : null };
   }
 
-  isInvisibleScrollPoint(el) { return String(el?.getAttribute('data-scroll-invisible') || '') === '1'; }
+  isInvisibleScrollPoint(el) { return (el?.getAttribute('data-scroll-invisible') || '') === '1'; }
 
   scrollPrefs(el) {
     const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-    const num = (s, d) => { const n = parseFloat(s); return Number.isFinite(n) ? n : d; };
+    const num = (v, d) => { const n = parseFloat(v); return Number.isFinite(n) ? n : d; };
     return {
       behavior: (el.getAttribute('data-scroll-behavior') || 'default').toLowerCase(),
       offset: clamp(num(el.getAttribute('data-scroll-offset'), 0), -10, 10),
@@ -75,14 +75,11 @@ class HybridRouter {
     const yNow = window.scrollY;
     const absTop = (n) => yNow + n.getBoundingClientRect().top;
     const absBottom = (n) => yNow + n.getBoundingClientRect().bottom;
-    let yTarget;
-    if (behavior === 'previous') yTarget = prev ? absBottom(prev) : absTop(el);
-    else if (behavior === 'center') {
-      if (next) {
-        const a = absTop(el), b = absTop(next);
-        yTarget = ((a + b) / 2) - (window.innerHeight / 2);
-      } else yTarget = absTop(el);
-    } else yTarget = absTop(el);
+
+    let yTarget = absTop(el);
+    if (behavior === 'previous') yTarget = prev ? absBottom(prev) : yTarget;
+    else if (behavior === 'center' && next) yTarget = ((absTop(el) + absTop(next)) / 2) - (window.innerHeight / 2);
+
     return Math.max(0, yTarget - this.offsetToPixels(offset));
   }
 
@@ -96,24 +93,20 @@ class HybridRouter {
     if (Math.abs(dy) < 1) return;
 
     const ease = (t) => (t < 0.5) ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-    const run = () => {
-      const t0 = performance.now();
-      const step = (now) => {
-        const t = Math.min(1, (now - t0) / duration);
-        window.scrollTo(0, yStart + dy * ease(t));
-        if (t < 1) requestAnimationFrame(step);
-      };
-      requestAnimationFrame(step);
+    const t0 = performance.now();
+    const step = (now) => {
+      const tt = Math.min(1, (now - t0) / duration);
+      window.scrollTo(0, yStart + dy * ease(tt));
+      if (tt < 1) requestAnimationFrame(step);
     };
-    requestAnimationFrame(() => requestAnimationFrame(run));
+    requestAnimationFrame(() => requestAnimationFrame(step));
   }
 
   scrollToSectionTop() { window.scrollTo(0, 0); }
 
   writeScrollUrl(section, hash, invisible, push) {
     const scrollId = this.scrollIdFromHash(hash);
-    const url = `${this.o}/${section || ''}${invisible ? '' : hash}`;
-    (push ? this.pS : this.rS)({ section, scrollId }, '', url);
+    (push ? this.pS : this.rS)({ section, scrollId }, '', `${this.o}/${section || ''}${invisible ? '' : hash}`);
   }
 
   shouldPushScroll(section, scrollId) {
@@ -159,10 +152,7 @@ class HybridRouter {
 
       const section = t.currentSectionCanonical();
       const scrollId = t.scrollIdFromHash(href);
-      const invisible = t.isInvisibleScrollPoint(el);
-      const push = t.shouldPushScroll(section, scrollId);
-
-      t.writeScrollUrl(section, href, invisible, push);
+      t.writeScrollUrl(section, href, t.isInvisibleScrollPoint(el), t.shouldPushScroll(section, scrollId));
       t.scrollToEl(el);
     };
 
@@ -179,9 +169,8 @@ class HybridRouter {
     const initialEl = t.getScrollElFromHash(l.hash);
     if (initialEl) {
       const section = t.sectionFromPath(l.pathname) || '';
-      const invisible = t.isInvisibleScrollPoint(initialEl);
       t.drive(section, 0);
-      settle(() => { t.scrollToEl(initialEl); t.writeScrollUrl(section, l.hash, invisible, false); }, 30);
+      settle(() => { t.scrollToEl(initialEl); t.writeScrollUrl(section, l.hash, t.isInvisibleScrollPoint(initialEl), false); }, 30);
       return;
     }
 
@@ -219,8 +208,7 @@ class HybridRouter {
       if (t._lastSectionHashCleaned === l.hash && (now - t._lastSectionHashCleanedAt) < (t.SETTLE_MS + 100)) return;
       t._lastSectionHashCleaned = l.hash; t._lastSectionHashCleanedAt = now;
 
-      const targetSection = t.sectionFromHash(l.hash);
-      setTimeout(() => cleanUrl(targetSection), ms);
+      setTimeout(() => cleanUrl(t.sectionFromHash(l.hash)), ms);
     });
 
     t.aEL('popstate', (e) => {
@@ -241,13 +229,8 @@ class HybridRouter {
 
       settle(() => {
         const el = t.getScrollElFromHash(hash);
-        if (el) {
-          t.scrollToEl(el);
-          t.writeScrollUrl(section, hash, t.isInvisibleScrollPoint(el), false);
-        } else {
-          t.scrollToSectionTop();
-          t.rS({ section, scrollId: '' }, '', `${t.o}/${section || ''}`);
-        }
+        if (el) t.scrollToEl(el), t.writeScrollUrl(section, hash, t.isInvisibleScrollPoint(el), false);
+        else t.scrollToSectionTop(), t.rS({ section, scrollId: '' }, '', `${t.o}/${section || ''}`);
         t._driving = 0;
       }, 30);
     });
