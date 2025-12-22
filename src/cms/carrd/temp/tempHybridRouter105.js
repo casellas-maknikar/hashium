@@ -1,10 +1,7 @@
 class HybridRouter {
   constructor() {
     const w = window, d = w.document, l = w.location, h = w.history, t = this;
-
-    t.l = l;
-    t.o = l.origin;
-    t.h = h;
+    t.l = l; t.o = l.origin; t.h = h;
     t.rS = h.replaceState.bind(h);
     t.pS = h.pushState.bind(h);
     t.aEL = w.addEventListener.bind(w);
@@ -13,16 +10,12 @@ class HybridRouter {
     t._driving = 0;
     t._rootId = '';
     t._suppressClickUntil = 0;
-
-    // prevent repeated section-hash cleanup spam (Carrd/internal/keyboard)
     t._lastSectionHashCleaned = '';
     t._lastSectionHashCleanedAt = 0;
 
-    const onReady =
-      (d.readyState === 'loading')
-        ? (fn) => d.addEventListener('DOMContentLoaded', fn, { once: 1 })
-        : (fn) => fn();
-
+    const onReady = (d.readyState === 'loading')
+      ? (fn) => d.addEventListener('DOMContentLoaded', fn, { once: 1 })
+      : (fn) => fn();
     onReady(() => t.init());
   }
 
@@ -30,27 +23,18 @@ class HybridRouter {
   sectionFromPath(p) { return decodeURIComponent(String(p || '').replace(/^\/+/, '')); }
 
   detectRootId() {
-    const s =
-      document.querySelector('#main section[id]') ||
-      document.querySelector('main section[id]') ||
-      document.querySelector('section[id]');
+    const s = document.querySelector('#main section[id]') || document.querySelector('main section[id]') || document.querySelector('section[id]');
     return (s && s.id) ? s.id : 'home';
   }
 
-  hashFor(section) {
-    if (!section) return `#${this._rootId}`;
-    return `#${section.replaceAll('/', '--')}`;
-  }
+  hashFor(section) { return !section ? `#${this._rootId}` : `#${section.replaceAll('/', '--')}`; }
 
   currentSectionCanonical() {
     const s = history.state?.section;
-    if (typeof s === 'string') return s;
-    return this.sectionFromPath(this.l.pathname) || '';
+    return (typeof s === 'string') ? s : (this.sectionFromPath(this.l.pathname) || '');
   }
 
-  allScrollPoints() {
-    return Array.from(document.querySelectorAll('[data-scroll-id]'));
-  }
+  allScrollPoints() { return Array.from(document.querySelectorAll('[data-scroll-id]')); }
 
   getScrollElFromHash(hashOrId) {
     const raw = String(hashOrId || '');
@@ -66,83 +50,52 @@ class HybridRouter {
   }
 
   prevNextScrollPoints(el) {
-    const points = this.allScrollPoints();
-    const i = points.indexOf(el);
+    const points = this.allScrollPoints(), i = points.indexOf(el);
+    return { prev: (i > 0) ? points[i - 1] : null, next: (i >= 0 && i < points.length - 1) ? points[i + 1] : null };
+  }
+
+  isInvisibleScrollPoint(el) { return String(el?.getAttribute('data-scroll-invisible') || '') === '1'; }
+
+  scrollPrefs(el) {
+    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+    const num = (s, d) => { const n = parseFloat(s); return Number.isFinite(n) ? n : d; };
     return {
-      prev: (i > 0) ? points[i - 1] : null,
-      next: (i >= 0 && i < points.length - 1) ? points[i + 1] : null,
+      behavior: (el.getAttribute('data-scroll-behavior') || 'default').toLowerCase(),
+      offset: clamp(num(el.getAttribute('data-scroll-offset'), 0), -10, 10),
+      speed: clamp(num(el.getAttribute('data-scroll-speed'), 3), 1, 5),
     };
   }
 
-  isInvisibleScrollPoint(el) {
-    return String(el?.getAttribute('data-scroll-invisible') || '') === '1';
-  }
-
-  scrollPrefs(el) {
-    const behavior = (el.getAttribute('data-scroll-behavior') || 'default').toLowerCase();
-
-    let offset = parseFloat(el.getAttribute('data-scroll-offset') || '0');
-    if (!Number.isFinite(offset)) offset = 0;
-    offset = Math.max(-10, Math.min(10, offset));
-
-    let speed = parseFloat(el.getAttribute('data-scroll-speed') || '3');
-    if (!Number.isFinite(speed)) speed = 3;
-    speed = Math.max(1, Math.min(5, speed));
-
-    return { behavior, offset, speed };
-  }
-
-  speedToDurationMs(speed) {
-    return [0, 1400, 950, 600, 330, 180][Math.round(speed)] || 600;
-  }
-
-  offsetToPixels(offset) {
-    return offset * 10;
-  }
+  speedToDurationMs(speed) { return [0, 1400, 950, 600, 330, 180][Math.round(speed)] || 600; }
+  offsetToPixels(offset) { return offset * 10; }
 
   computeScrollTargetY(el) {
     const { behavior, offset } = this.scrollPrefs(el);
     const { prev, next } = this.prevNextScrollPoints(el);
-    const offsetPx = this.offsetToPixels(offset);
-
     const yNow = window.scrollY;
-    const absTop = (node) => yNow + node.getBoundingClientRect().top;
-    const absBottom = (node) => yNow + node.getBoundingClientRect().bottom;
-
+    const absTop = (n) => yNow + n.getBoundingClientRect().top;
+    const absBottom = (n) => yNow + n.getBoundingClientRect().bottom;
     let yTarget;
-    if (behavior === 'previous') {
-      yTarget = prev ? absBottom(prev) : absTop(el);
-    } else if (behavior === 'center') {
+    if (behavior === 'previous') yTarget = prev ? absBottom(prev) : absTop(el);
+    else if (behavior === 'center') {
       if (next) {
-        const a = absTop(el);
-        const b = absTop(next);
+        const a = absTop(el), b = absTop(next);
         yTarget = ((a + b) / 2) - (window.innerHeight / 2);
-      } else {
-        yTarget = absTop(el);
-      }
-    } else {
-      yTarget = absTop(el);
-    }
-
-    return Math.max(0, yTarget - offsetPx);
+      } else yTarget = absTop(el);
+    } else yTarget = absTop(el);
+    return Math.max(0, yTarget - this.offsetToPixels(offset));
   }
 
   scrollToEl(el) {
     if (!el) return;
-
     const { speed } = this.scrollPrefs(el);
     const duration = this.speedToDurationMs(speed);
-
     const yStart = window.scrollY;
     const yTarget = this.computeScrollTargetY(el);
     const dy = yTarget - yStart;
-
     if (Math.abs(dy) < 1) return;
 
-    const ease = (t) => (t < 0.5)
-      ? 4 * t * t * t
-      : 1 - Math.pow(-2 * t + 2, 3) / 2;
-
+    const ease = (t) => (t < 0.5) ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
     const run = () => {
       const t0 = performance.now();
       const step = (now) => {
@@ -152,56 +105,42 @@ class HybridRouter {
       };
       requestAnimationFrame(step);
     };
-
     requestAnimationFrame(() => requestAnimationFrame(run));
   }
 
-  scrollToSectionTop() {
-    window.scrollTo(0, 0);
-  }
+  scrollToSectionTop() { window.scrollTo(0, 0); }
 
   writeScrollUrl(section, hash, invisible, push) {
     const scrollId = this.scrollIdFromHash(hash);
     const url = `${this.o}/${section || ''}${invisible ? '' : hash}`;
-    const state = { section, scrollId };
-    (push ? this.pS : this.rS)(state, '', url);
+    (push ? this.pS : this.rS)({ section, scrollId }, '', url);
   }
 
   shouldPushScroll(section, scrollId) {
     const cs = history.state || {};
-    const curSection = typeof cs.section === 'string' ? cs.section : this.sectionFromPath(this.l.pathname) || '';
-    const curScrollId = typeof cs.scrollId === 'string' ? cs.scrollId : '';
+    const curSection = (typeof cs.section === 'string') ? cs.section : (this.sectionFromPath(this.l.pathname) || '');
+    const curScrollId = (typeof cs.scrollId === 'string') ? cs.scrollId : '';
     return !(curSection === section && curScrollId === scrollId);
   }
 
   shouldPushSection(section) {
     const cs = history.state || {};
-    const curSection =
-      (typeof cs.section === 'string')
-        ? cs.section
-        : (this.sectionFromPath(this.l.pathname) || '');
+    const curSection = (typeof cs.section === 'string') ? cs.section : (this.sectionFromPath(this.l.pathname) || '');
     const curScrollId = (typeof cs.scrollId === 'string') ? cs.scrollId : '';
     return !(curSection === section && curScrollId === '');
   }
 
   drive(section, push) {
     const t = this, l = t.l, ms = t.SETTLE_MS;
-
     if (push && !t.shouldPushSection(section || '')) push = 0;
-
     t._driving = 1;
     const hh = t.hashFor(section);
     push ? (l.hash = hh) : l.replace(hh);
-
-    setTimeout(() => {
-      t.rS({ section }, '', `${t.o}/${section || ''}`);
-      t._driving = 0;
-    }, ms);
+    setTimeout(() => { t.rS({ section }, '', `${t.o}/${section || ''}`); t._driving = 0; }, ms);
   }
 
   init() {
     const t = this, l = t.l, o = t.o, ms = t.SETTLE_MS;
-
     t._rootId = t.detectRootId();
 
     const settle = (fn, extra = 0) => setTimeout(fn, ms + extra);
@@ -210,16 +149,12 @@ class HybridRouter {
     const interceptScrollpoint = (e) => {
       const a = e.target?.closest?.('a[href^="#"]');
       if (!a) return;
-
       const href = a.getAttribute('href') || '#';
       if (!href || href === '#') return;
-
       const el = t.getScrollElFromHash(href);
       if (!el) return;
 
-      e.preventDefault();
-      e.stopImmediatePropagation();
-
+      e.preventDefault(); e.stopImmediatePropagation();
       t._suppressClickUntil = Date.now() + 1000;
 
       const section = t.currentSectionCanonical();
@@ -235,62 +170,45 @@ class HybridRouter {
     t.aEL('mousedown', interceptScrollpoint, true);
 
     t.aEL('click', (e) => {
-      if (Date.now() <= t._suppressClickUntil) {
-        const a = e.target?.closest?.('a[href^="#"]');
-        if (a) {
-          e.preventDefault();
-          e.stopImmediatePropagation();
-        }
-      }
+      if (Date.now() > t._suppressClickUntil) return;
+      const a = e.target?.closest?.('a[href^="#"]');
+      if (!a) return;
+      e.preventDefault(); e.stopImmediatePropagation();
     }, true);
 
-    // Initial entry: /page#test direct load
     const initialEl = t.getScrollElFromHash(l.hash);
     if (initialEl) {
       const section = t.sectionFromPath(l.pathname) || '';
       const invisible = t.isInvisibleScrollPoint(initialEl);
-
       t.drive(section, 0);
-      settle(() => {
-        t.scrollToEl(initialEl);
-        t.writeScrollUrl(section, l.hash, invisible, false);
-      }, 30);
-
+      settle(() => { t.scrollToEl(initialEl); t.writeScrollUrl(section, l.hash, invisible, false); }, 30);
       return;
     }
 
-    // Initial section normalization
-    if ((!l.hash || l.hash === '#') && l.pathname !== '/') {
-      t.drive(t.sectionFromPath(l.pathname), 0);
-    } else {
+    if ((!l.hash || l.hash === '#') && l.pathname !== '/') t.drive(t.sectionFromPath(l.pathname), 0);
+    else {
       const s = (l.hash === '#') ? '' : t.sectionFromHash(l.hash);
       setTimeout(() => cleanUrl(s), ms);
       if (l.hash === '#') t.drive('', 0);
     }
 
-    // Section click routing (anti-spam)
     t.aEL('click', (e) => {
       if (Date.now() <= t._suppressClickUntil) return;
-
       const a = e.target?.closest?.('a[href^="#"]');
       if (!a) return;
-
       e.preventDefault();
-
       const href = a.getAttribute('href') || '#';
       const s = (href === '#' || href === '') ? '' : t.sectionFromHash(href);
       t.drive(s, t.shouldPushSection(s) ? 1 : 0);
     }, 1);
 
-    // Hashchange: scrollpoints are owned; sections get cleaned (deduped)
     t.aEL('hashchange', () => {
       if (t._driving) return;
 
       const el = t.getScrollElFromHash(l.hash);
       if (el) {
         const section = t.currentSectionCanonical();
-        const invisible = t.isInvisibleScrollPoint(el);
-        t.writeScrollUrl(section, l.hash, invisible, false);
+        t.writeScrollUrl(section, l.hash, t.isInvisibleScrollPoint(el), false);
         t.scrollToEl(el);
         return;
       }
@@ -298,50 +216,34 @@ class HybridRouter {
       if (!l.hash || l.hash === '#') return;
 
       const now = Date.now();
-      if (t._lastSectionHashCleaned === l.hash && (now - t._lastSectionHashCleanedAt) < (t.SETTLE_MS + 100)) {
-        return;
-      }
-
-      t._lastSectionHashCleaned = l.hash;
-      t._lastSectionHashCleanedAt = now;
+      if (t._lastSectionHashCleaned === l.hash && (now - t._lastSectionHashCleanedAt) < (t.SETTLE_MS + 100)) return;
+      t._lastSectionHashCleaned = l.hash; t._lastSectionHashCleanedAt = now;
 
       const targetSection = t.sectionFromHash(l.hash);
       setTimeout(() => cleanUrl(targetSection), ms);
     });
 
-    // Back / Forward: restore scrollpoint or section top
     t.aEL('popstate', (e) => {
       if (t._driving) return;
 
-      const section =
-        (typeof e.state?.section === 'string')
-          ? e.state.section
-          : t.sectionFromPath(l.pathname);
-
+      const section = (typeof e.state?.section === 'string') ? e.state.section : t.sectionFromPath(l.pathname);
       const scrollId = (typeof e.state?.scrollId === 'string') ? e.state.scrollId : '';
       const hash = scrollId ? `#${scrollId}` : '';
 
       if (!scrollId) {
         t.drive(section, 0);
-        settle(() => {
-          t.scrollToSectionTop();
-          t.rS({ section, scrollId: '' }, '', `${t.o}/${section || ''}`);
-        }, 30);
+        settle(() => { t.scrollToSectionTop(); t.rS({ section, scrollId: '' }, '', `${t.o}/${section || ''}`); }, 30);
         return;
       }
 
       const sectionHash = t.hashFor(section);
-      if (l.hash !== sectionHash) {
-        t._driving = 1;
-        l.replace(sectionHash);
-      }
+      if (l.hash !== sectionHash) { t._driving = 1; l.replace(sectionHash); }
 
       settle(() => {
         const el = t.getScrollElFromHash(hash);
         if (el) {
           t.scrollToEl(el);
-          const invisible = t.isInvisibleScrollPoint(el);
-          t.writeScrollUrl(section, hash, invisible, false);
+          t.writeScrollUrl(section, hash, t.isInvisibleScrollPoint(el), false);
         } else {
           t.scrollToSectionTop();
           t.rS({ section, scrollId: '' }, '', `${t.o}/${section || ''}`);
