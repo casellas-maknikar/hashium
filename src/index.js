@@ -1,1 +1,1 @@
-import HybridRouter from "./cms/carrd/libs/routers/v2/hybridRouter.js";
+import HybridRouter from "./cms/carrd/routers/libs/v2/hybridRouter.js";
