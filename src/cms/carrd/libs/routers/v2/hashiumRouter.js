@@ -5,7 +5,7 @@ class HashiumRouter {
     this.cms = "unknown";
     this.mode = "default";
     this.enabled = false;
-    this.start();
+    this.start().catch(console.error);
   }
 
   async start() {
@@ -49,5 +49,4 @@ class HashiumRouter {
   }
 }
 
-// Self-boot on import
-new HashiumRouter();
+export default new HashiumRouter();
