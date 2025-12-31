@@ -236,4 +236,15 @@ class HybridMode {
     });
   }
 }
-export default new HybridMode();
+
+/**
+ * CHANGE: export a NAMED function so your router can do:
+ *   import { hybridMode } from "./modes/hybridMode.js";
+ *
+ * This replaces the previous:
+ *   export default new HybridMode();
+ */
+export function hybridMode(ctx = {}) {
+  void ctx; // reserved for future use (router context, debug, etc.)
+  return new HybridMode();
+}
