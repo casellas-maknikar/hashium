@@ -244,9 +244,9 @@ class HybridMode {
  * This replaces the previous:
  *   export default new HybridMode();
  */
-export function hybridMode(ctx = {}) {
+export function HybridMode(ctx = {}) {
   void ctx; // reserved for future use (router context, debug, etc.)
   return new HybridMode();
 }
 
-export default hybridMode;
+export default HybridMode;
