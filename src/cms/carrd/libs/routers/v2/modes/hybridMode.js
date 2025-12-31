@@ -248,3 +248,5 @@ export function hybridMode(ctx = {}) {
   void ctx; // reserved for future use (router context, debug, etc.)
   return new HybridMode();
 }
+
+export default hybridMode;
