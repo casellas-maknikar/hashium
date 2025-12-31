@@ -1,5 +1,8 @@
 class HybridMode {
-  constructor() {
+  constructor(ctx = {}) {
+    // ctx is optional: { cms, mode, router }
+    this.ctx = ctx;
+
     const w = window, d = w.document, l = w.location, h = w.history, t = this;
     t.l = l; t.o = l.origin; t.h = h;
     t.rS = h.replaceState.bind(h);
@@ -235,18 +238,6 @@ class HybridMode {
       }, 30);
     });
   }
-}
-
-/**
- * CHANGE: export a NAMED function so your router can do:
- *   import { hybridMode } from "./modes/hybridMode.js";
- *
- * This replaces the previous:
- *   export default new HybridMode();
- */
-export function HybridMode(ctx = {}) {
-  void ctx; // reserved for future use (router context, debug, etc.)
-  return new HybridMode();
 }
 
 export default HybridMode;
