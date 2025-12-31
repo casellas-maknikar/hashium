@@ -1,4 +1,4 @@
-class HybridRouter {
+class HybridMode {
   constructor() {
     const w = window, d = w.document, l = w.location, h = w.history, t = this;
     t.l = l; t.o = l.origin; t.h = h;
@@ -236,4 +236,4 @@ class HybridRouter {
     });
   }
 }
-export default new HybridRouter();
+export default new HybridMode();
