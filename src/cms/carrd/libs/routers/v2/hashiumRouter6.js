@@ -1,4 +1,4 @@
-import HybridMode from "./modes/hybridMode1.js";
+import HybridMode from "./modes/hybridMode2.js";
 
 class HashiumRouter {
   constructor() {
